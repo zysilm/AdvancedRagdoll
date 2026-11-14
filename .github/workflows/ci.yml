@@ -1,4 +1,4 @@
-# Builds the library and runs the sample on every push and pull request.
+# Builds the library, runs the sample and the offline tests on every push and pull request.
 name: ci
 
 on:
@@ -20,4 +20,48 @@ jobs:
             10.0.x
       - run: dotnet build AdvancedRagdoll.csproj -c Release
       - run: dotnet run --project tests/LibrarySample -c Release
+      - run: dotnet run --project tests/BoneNameLiterals -c Release
       - run: dotnet pack AdvancedRagdoll.csproj -c Release -o artifacts
+
+  # Offline tests: each compiles the library source files it checks (so it sees internal types) and needs nothing
+  # outside this repository.
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [BoundedMeshContacts, HairPhysics, MeshDeformation, MeshDispatcher, MeshLod, MeshVolume, RagdollRecording,
+                  RagdollTrigger, RetainedGarments, SurfaceQueries, WeaponBodyMesh, WeaponRelease, WorldPhysics]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet run --project tests/${{ matrix.project }} -c Release
+      - name: Recover local skin penetration on solid terrain
+        if: matrix.project == 'BoundedMeshContacts'
+        run: dotnet run --project tests/BoundedMeshContacts -c Release -- --solid-terrain --deform-down
+
+  # High-poly collision under a hard memory limit. Windows only: the supervisor caps the child process with a job object.
+  mesh-stress:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        pose: [dense, spread]
+        quality: [0, 100]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Bounded native collision under a hard memory limit
+        run: dotnet run --project tests/MeshStress -c Release -- --policy bounded --pose ${{ matrix.pose }} --quality ${{ matrix.quality }} --terrain-grid 12 --solid-terrain --iterations 8 --steps 600 --rss-mib 256 --seconds 120
+      - name: Shared workers with collision LOD
+        if: matrix.quality == 0
+        run: dotnet run --project tests/MeshStress -c Release -- --policy bounded --pose ${{ matrix.pose }} --quality 50 --terrain-grid 12 --solid-terrain --iterations 8 --steps 600 --frozen-mesh --background-lod --threads 2 --shared-dispatcher --rss-mib 256 --seconds 120

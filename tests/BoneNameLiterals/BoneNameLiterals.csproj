@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Keeps the library's sources host-neutral: no bone-name literals ("j_..." / "n_...": bone names come from the
+       skeleton profile), no host-specific words or log prefixes, no bone name inside a string literal, and no
+       deny-listed product or tool name in the library's code, comments, docs or project file. See Program.cs.
+       Run: dotnet run -c Release   (exit code 0 = clean). -->
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+</Project>

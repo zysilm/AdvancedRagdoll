@@ -2,8 +2,8 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// Stage A7 check: a small hand-made humanoid skeleton, standing on a flat ground plane, made a ragdoll through the
-// library's public API only (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §3.1). It must fall, land on the ground, settle,
+// A small hand-made humanoid skeleton, standing on a flat ground plane, made a ragdoll through the
+// library's public API only. It must fall, land on the ground, settle,
 // and do the same thing twice. Exit code 0 when every check passes.
 
 using System.Numerics;

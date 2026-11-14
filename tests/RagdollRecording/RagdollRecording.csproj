@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <!-- The library's exact BepuPhysics package: the body-state record is read from a real simulation. -->
+    <PackageReference Include="BepuPhysics" Version="2.5.0-beta.22" />
+    <Compile Include="../../Recording/RagdollRecordingFormat.cs" Link="Production/RagdollRecordingFormat.cs" />
+    <Compile Include="../../Recording/RagdollRecordingWriter.cs" Link="Production/RagdollRecordingWriter.cs" />
+    <Compile Include="../../Recording/RagdollRecordingReader.cs" Link="Production/RagdollRecordingReader.cs" />
+    <Compile Include="../../Recording/RagdollRecordingAnalysis.cs" Link="Production/RagdollRecordingAnalysis.cs" />
+    <Compile Include="../../Recording/RagdollRecordingBepu.cs" Link="Production/RagdollRecordingBepu.cs" />
+    <Compile Include="../../Recording/RagdollRecordingWatch.cs" Link="Production/RagdollRecordingWatch.cs" />
+  </ItemGroup>
+</Project>
