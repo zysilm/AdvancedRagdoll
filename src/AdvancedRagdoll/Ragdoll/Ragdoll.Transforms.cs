@@ -41,12 +41,7 @@ public unsafe partial class Ragdoll
         return scale;
     }
 
-    /// <summary>
-    /// Read the scale that is actually applied to the rendered character. The NPC Scale effect
-    /// writes the render scale directly, while ordinary actors normally expose the same
-    /// value through Skeleton.Transform.Scale. Prefer the draw object so collision follows live
-    /// live scale changes, and retain the skeleton value as a safe fallback.
-    /// </summary>
+    /// <summary>The scale actually applied to the rendered character (SimulationContext.GetCharacterScale).</summary>
     internal Vector3 GetCharacterScale(nint address, IHostSkeleton ns) => ctx.GetCharacterScale(address, ns);
 
     private bool TryGetVisualScale(nint address, out Vector3 scale) => ctx.TryGetVisualScale(address, out scale);

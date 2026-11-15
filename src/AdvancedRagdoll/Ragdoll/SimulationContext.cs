@@ -206,6 +206,13 @@ public unsafe partial class Ragdoll
         // a6-6
         // True once physics has taken the body over from the death animation.
         internal bool PhysicsStarted;
+        // a6-7
+        // EntityId captured at Activate — used every frame to detect that the target despawned
+        // and its object-table slot was reused by an unrelated character (so we don't freeze
+        // and write ragdoll bones onto the newcomer).
+        internal uint TargetEntityId;
+        // Set by the host that runs the local player's live hair (outside a ragdoll) on this ragdoll.
+        internal bool RunAnimatedHair;
         // Short post-wake window that keeps the island awake long enough for passive constraints and
         // contacts to resolve after grab/release or an external collision.
         internal float BiomechanicalSettleRemaining;
@@ -216,6 +223,18 @@ public unsafe partial class Ragdoll
         {
             BiomechanicalSettleRemaining = System.MathF.Max(BiomechanicalSettleRemaining, duration);
             PrevAllAsleep = false;
+        }
+
+        /// <summary>
+        /// True when the ragdoll target is still a live object. Matches against the object table rather
+        /// than dereferencing the target address — once the actor is freed, its memory often still reads
+        /// back the stale EntityId, so a pointer-based check happily passes and we hand a dangling pointer
+        /// to native game code (that is an access violation, not a catchable exception).
+        /// </summary>
+        internal bool TargetObjectAlive()
+        {
+            if (TargetCharacterAddress == nint.Zero) return false;
+            return Actors.IsAlive(TargetCharacterAddress, TargetEntityId);
         }
 
         /// <summary>
@@ -277,7 +296,5 @@ public unsafe partial class Ragdoll
         /// <summary>The recorded outcome of the structural fit (1 none, 2 not ready, 3 fitted, 4 failed).</summary>
         internal void RecFitOutcome(int outcome) => owner.recFitOutcome = outcome;
         internal FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address) => owner.CaptureFrozenMeshCache(address);
-        internal bool TargetObjectAlive() => owner.TargetObjectAlive();
-        internal bool RunAnimatedHair => owner.RunAnimatedHair;
     }
 }

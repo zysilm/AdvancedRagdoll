@@ -270,11 +270,7 @@ public unsafe partial class Ragdoll
     /// often still reads back the stale EntityId, so a pointer-based check happily passes and we hand
     /// a dangling pointer to native game code (that is an access violation, not a catchable exception).
     /// </summary>
-    private bool TargetObjectAlive()
-    {
-        if (targetCharacterAddress == nint.Zero) return false;
-        return actors.IsAlive(targetCharacterAddress, targetEntityId);
-    }
+    private bool TargetObjectAlive() => ctx.TargetObjectAlive();
 
     private void StepAndApply(float dt)
     {

@@ -19,7 +19,7 @@ public unsafe partial class Ragdoll
     private readonly HairRig hairRig;
 
     /// <summary>Set by the host that runs the local player's live hair (outside a ragdoll) on this ragdoll.</summary>
-    internal bool RunAnimatedHair { get => hairRig.RunAnimatedHair; set => hairRig.RunAnimatedHair = value; }
+    internal bool RunAnimatedHair { get => ctx.RunAnimatedHair; set => ctx.RunAnimatedHair = value; }
     internal bool HairRigActive => hairRig.Active;
 
     /// <summary>
@@ -50,7 +50,7 @@ public unsafe partial class Ragdoll
         private readonly HairContactCapsule[] hairContacts = new HairContactCapsule[64];
         private bool hairRigActive;
         private int hairKaoRagdollBodyIndex = -1, hairGroundCursor;
-        internal bool RunAnimatedHair { get; set; }
+        private bool RunAnimatedHair => ctx.RunAnimatedHair;
         private bool animatedHair;
         private nint animatedHairDraw;
         private ulong animatedHairObject;
