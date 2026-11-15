@@ -285,3 +285,20 @@ host or another component's state: the skeleton read and the bone definitions, t
 volumes and hull fits (recorded), the mesh status text, the surface cache, the torso bodies, the bone index set, the
 animation freeze, the colliders of the other characters, the hair rig and the start and end records. The handoff
 sample is activation state; the ragdoll hands it in. `CoreCalls` is unchanged.
+<!-- a6-11 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `Stepper` | `Ragdoll.Stepping.cs` | the stepping loop's rules: the frame clock (the last frame stamp, the frame delta), the frame counter, the start of physics (counter, settle window, a clean accumulator), the fixed-step accumulator and the substep budget, the previous-tick flag and the render blend, the settle countdown, the resting decision, the fall gravity and the velocity clamp |
+
+Since A6-11 the context holds the fixed-step accumulator and the previous-tick flag (`PhysicsAccumulator`,
+`HasPrevPhysicsState`) and the render interpolation the hair reads (`PhysicsInterpolation`), so `CoreCalls` no longer
+carries it (three members left: the two mesh-cache reads and the frozen mesh capture). The ragdoll's step method is a
+short ordered sequence: the start of the frame (liveness, skeleton read and record, rebuild check, animation freeze), the
+skeleton root, the traversal carriers, the resting decision, the collapse controllers, the tracking of the other
+characters' colliders, the physics steps, the containment and the settle countdown, the frame-end record, the pose
+write-back and the follow target. The substep loop stays in the ragdoll because every step calls other components and
+recorded methods (grab drive, mesh LOD, water, extensions, the solver step, the standing anchor, the surface, the hair,
+impacts, the step record, the mesh early out); the stepper decides when a substep is due, captures and drops the
+backlog and counts the substeps against the cap. The fall gravity gets the water, the hold (a grab or the standing
+support) and the ground height from the ragdoll. The collider tracking loop reads and records the host, so it stays in
+the ragdoll as its own method.

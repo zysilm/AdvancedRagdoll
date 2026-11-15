@@ -271,11 +271,21 @@ public unsafe partial class Ragdoll
         // The recording session (Ragdoll.Recording.cs): records go through it, and it says whether this activation is
         // recorded. Set by the ragdoll's constructor, before anything can record.
         internal Recorder Recorder = null!;
+        // a6-11
+        // The stepping loop's fixed-step accumulator (wall time not yet stepped) and whether the previous tick's pose
+        // was captured for the render interpolation. The stepping loop (Stepper) owns the rules; the hair reads the
+        // interpolation too.
+        internal float PhysicsAccumulator;
+        internal bool HasPrevPhysicsState;
+
+        /// <summary>How far the render frame is between the last two physics steps (1 before the first step).</summary>
+        internal float PhysicsInterpolation =>
+            HasPrevPhysicsState ? System.Math.Clamp(PhysicsAccumulator / FixedTimestep, 0, 1) : 1;
     }
 
     /// <summary>
     /// What the components call in the part of the ragdoll that is not a component yet: recording, the mesh caches,
-    /// constraint removal, the character scale and the stepping clock. Every member forwards to the ragdoll's own
+    /// constraint removal and the character scale. Every member forwards to the ragdoll's own
     /// method unchanged; the list shrinks as those parts become components.
     /// </summary>
     private sealed class CoreCalls
@@ -285,10 +295,6 @@ public unsafe partial class Ragdoll
 
         internal FrozenMeshGeometryCache? GetWeaponContactMesh(nint address) => owner.GetWeaponContactMesh(address);
         internal FrozenMeshGeometryCache? CachedSurfaceFor(nint address) => owner.CachedSurfaceFor(address);
-
-        /// <summary>How far the render frame is between the last two physics steps (1 before the first step).</summary>
-        internal float PhysicsInterpolation =>
-            owner.hasPrevPhysicsState ? System.Math.Clamp(owner.physicsAccumulator / FixedTimestep, 0, 1) : 1;
 
         // a6-2
         internal FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address) => owner.CaptureFrozenMeshCache(address);
