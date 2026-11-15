@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 
 namespace AdvancedRagdoll;
@@ -78,7 +79,14 @@ public unsafe partial class Ragdoll
         return t * t * (3f - 2f * t);
     }
 
-    private bool IsTorsoBody(int index) => torsoBodyIndices.Count == 0 || torsoBodyIndices.Contains(index);
+    // The landing weight (Ragdoll.Impacts.cs).
+    private readonly Impacts impacts;
+
+    private float impactFreezeRemaining { get => impacts.FreezeRemaining; set => impacts.FreezeRemaining = value; }
+    private float impactCooldownRemaining { get => impacts.CooldownRemaining; set => impacts.CooldownRemaining = value; }
+    private float previousDescentSpeed { get => impacts.PreviousDescentSpeed; set => impacts.PreviousDescentSpeed = value; }
+    private List<int> torsoBodyIndices => impacts.TorsoBodyIndices;
+    private uint impactRandomState { get => impacts.RandomState; set => impacts.RandomState = value; }
 
     /// <summary>
     /// Watch the torso's descent collapse. A landing is simply a fall that the ground took most of in a
@@ -87,72 +95,16 @@ public unsafe partial class Ragdoll
     /// </summary>
     private void DetectImpact(float dt)
     {
-        if (simulation == null || ragdollBones.Count == 0) return;
-
-        // A held/posed body can move downward rapidly without entering a free landing. Do not
-        // inject hitstop, heave or joint releases into an active external controller.
-        if (grabSlots.Count > 0 || standingActive)
-        {
-            previousDescentSpeed = 0f;
-            return;
-        }
-
-        if (impactCooldownRemaining > 0f)
-            impactCooldownRemaining = MathF.Max(0f, impactCooldownRemaining - dt);
-
-        var descent = 0f;
-        var counted = 0;
-        for (int i = 0; i < ragdollBones.Count; i++)
-        {
-            if (!IsTorsoBody(i)) continue;
-            descent -= simulation.Bodies.GetBodyReference(ragdollBones[i].BodyHandle).Velocity.Linear.Y;
-            counted++;
-        }
-        if (counted == 0) return;
-        descent /= counted;
-
-        var before = previousDescentSpeed;
-        previousDescentSpeed = descent;
-
-        if (impactCooldownRemaining > 0f) return;
-        if (before < ImpactSpeed) return;                    // was not coming down
-        if (descent > before * ImpactArrestRatio) return;    // ground has not taken it yet
-
-        StageImpact(before);
+        // A held/posed body (a grab or the standing support) is not landing.
+        if (impacts.Detect(dt, grabSlots.Count > 0 || standingActive, out var speed))
+            StageImpact(speed);
     }
 
     private void StageImpact(float speed)
     {
         if (simulation == null) return;
 
-        var severity = ImpactSeverity(speed);
-
-        impactCooldownRemaining = ImpactCooldown;
-        impactFreezeRemaining = ImpactFreezeMin + (ImpactFreezeMax - ImpactFreezeMin) * severity;
-
-        // Real bodies do not bounce. Flesh is a lousy spring: a coefficient of restitution of maybe 0.1,
-        // which is why a dropped body goes "thud" and stays there. The heave is therefore NOT a physical
-        // bounce — it is the fighting game's deliberate stylisation of one, and like theirs it earns its
-        // place only on a genuinely hard blow. So it scales in from nothing: an ordinary knockdown gets
-        // no heave at all, just the beat and the follow-through, which is what a real body does.
-        var heave = MathF.Min(speed * ImpactBounceFraction, ImpactMaxBounce) * severity;
-
-        if (heave > 0.01f)
-        {
-            for (int i = 0; i < ragdollBones.Count; i++)
-            {
-                var body = simulation.Bodies.GetBodyReference(ragdollBones[i].BodyHandle);
-
-                // The torso takes the heave and the limbs barely do, so the body FOLDS about its hips on
-                // the way up instead of rising like a plank. A uniform lift is neither physical nor
-                // cinematic; it is a third thing, and it looks like a board.
-                var share = IsTorsoBody(i) ? 1f : ImpactLimbBounceShare;
-                var velocity = body.Velocity.Linear;
-                velocity.Y = MathF.Max(velocity.Y, heave * share);
-                body.Velocity.Linear = velocity;
-                body.Awake = true;
-            }
-        }
+        impacts.Stage(speed, out var severity, out var heave);
 
         // Take the brakes off, and the limbs' own momentum carries them through. See FollowThroughBones.
         foreach (var bone in FollowThroughBones)
@@ -167,12 +119,109 @@ public unsafe partial class Ragdoll
         HardLanding?.Invoke(speed);
     }
 
-    private float NextImpactJitter()
+    /// <summary>
+    /// The landing weight: watches the torso's descent for a landing, and stages one — the hitstop, and on a hard
+    /// blow the heave. The joint release, the event and the camera stay with the ragdoll. A component
+    /// (docs/ARCHITECTURE.md §8).
+    /// </summary>
+    private sealed class Impacts
     {
-        // xorshift — deterministic per corpse, and no allocation on a per-substep path.
-        impactRandomState ^= impactRandomState << 13;
-        impactRandomState ^= impactRandomState >> 17;
-        impactRandomState ^= impactRandomState << 5;
-        return (impactRandomState & 0xFFFFFF) / (float)0x1000000;
+        private readonly SimulationContext ctx;
+        internal Impacts(SimulationContext ctx) { this.ctx = ctx; }
+
+        internal float FreezeRemaining;
+        internal float CooldownRemaining;
+        internal float PreviousDescentSpeed;
+        // The bodies that actually arrive when this rig lands (indices into the body list).
+        internal readonly List<int> TorsoBodyIndices = new();
+        internal uint RandomState = 0x9E3779B9u;
+
+        private bool IsTorsoBody(int index) => TorsoBodyIndices.Count == 0 || TorsoBodyIndices.Contains(index);
+
+        /// <summary>True when the torso's descent was just arrested (a landing), with the speed it came down at.
+        /// <paramref name="held"/>: a grab or the standing support holds the rig.</summary>
+        internal bool Detect(float dt, bool held, out float speed)
+        {
+            speed = 0f;
+            var simulation = ctx.Simulation;
+            var ragdollBones = ctx.Bodies;
+            if (simulation == null || ragdollBones.Count == 0) return false;
+
+            // A held/posed body can move downward rapidly without entering a free landing. Do not
+            // inject hitstop, heave or joint releases into an active external controller.
+            if (held)
+            {
+                PreviousDescentSpeed = 0f;
+                return false;
+            }
+
+            if (CooldownRemaining > 0f)
+                CooldownRemaining = MathF.Max(0f, CooldownRemaining - dt);
+
+            var descent = 0f;
+            var counted = 0;
+            for (int i = 0; i < ragdollBones.Count; i++)
+            {
+                if (!IsTorsoBody(i)) continue;
+                descent -= simulation.Bodies.GetBodyReference(ragdollBones[i].BodyHandle).Velocity.Linear.Y;
+                counted++;
+            }
+            if (counted == 0) return false;
+            descent /= counted;
+
+            var before = PreviousDescentSpeed;
+            PreviousDescentSpeed = descent;
+
+            if (CooldownRemaining > 0f) return false;
+            if (before < ImpactSpeed) return false;                    // was not coming down
+            if (descent > before * ImpactArrestRatio) return false;    // ground has not taken it yet
+
+            speed = before;
+            return true;
+        }
+
+        /// <summary>The hitstop and, on a hard blow, the heave.</summary>
+        internal void Stage(float speed, out float severity, out float heave)
+        {
+            var simulation = ctx.Simulation!;
+            var ragdollBones = ctx.Bodies;
+            severity = ImpactSeverity(speed);
+
+            CooldownRemaining = ImpactCooldown;
+            FreezeRemaining = ImpactFreezeMin + (ImpactFreezeMax - ImpactFreezeMin) * severity;
+
+            // Real bodies do not bounce. Flesh is a lousy spring: a coefficient of restitution of maybe 0.1,
+            // which is why a dropped body goes "thud" and stays there. The heave is therefore NOT a physical
+            // bounce — it is the fighting game's deliberate stylisation of one, and like theirs it earns its
+            // place only on a genuinely hard blow. So it scales in from nothing: an ordinary knockdown gets
+            // no heave at all, just the beat and the follow-through, which is what a real body does.
+            heave = MathF.Min(speed * ImpactBounceFraction, ImpactMaxBounce) * severity;
+
+            if (heave > 0.01f)
+            {
+                for (int i = 0; i < ragdollBones.Count; i++)
+                {
+                    var body = simulation.Bodies.GetBodyReference(ragdollBones[i].BodyHandle);
+
+                    // The torso takes the heave and the limbs barely do, so the body FOLDS about its hips on
+                    // the way up instead of rising like a plank. A uniform lift is neither physical nor
+                    // cinematic; it is a third thing, and it looks like a board.
+                    var share = IsTorsoBody(i) ? 1f : ImpactLimbBounceShare;
+                    var velocity = body.Velocity.Linear;
+                    velocity.Y = MathF.Max(velocity.Y, heave * share);
+                    body.Velocity.Linear = velocity;
+                    body.Awake = true;
+                }
+            }
+        }
+
+        internal float NextJitter()
+        {
+            // xorshift — deterministic per corpse, and no allocation on a per-substep path.
+            RandomState ^= RandomState << 13;
+            RandomState ^= RandomState >> 17;
+            RandomState ^= RandomState << 5;
+            return (RandomState & 0xFFFFFF) / (float)0x1000000;
+        }
     }
 }

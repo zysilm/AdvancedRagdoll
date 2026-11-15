@@ -97,6 +97,23 @@ public unsafe partial class Ragdoll
             if (rb.SegmentHalfLength > 0)
                 origin -= rb.SegmentHalfLength * Vector3.Transform(Vector3.UnitY, body.Pose.Orientation);
         }
+
+        // a6-3
+        // True from Activate until Deactivate (or until the ragdoll deactivates itself).
+        internal bool IsActive;
+        // What the rig actually weighs, summed when the rig is built.
+        internal float TotalMass;
+
+        /// <summary>The profile whose class tuning applies: the generated rig's, or this ragdoll's profile.</summary>
+        internal SkeletonProfile ActiveClassProfile => IsGeneric ? SkeletonProfile.Auto() : Profile;
+
+        /// <summary>The body of a bone, by name; null when the bone has none.</summary>
+        internal BodyHandle? FindBodyHandle(string boneName)
+        {
+            foreach (var rb in Bodies)
+                if (rb.Name == boneName) return rb.BodyHandle;
+            return null;
+        }
     }
 
     /// <summary>
@@ -123,5 +140,14 @@ public unsafe partial class Ragdoll
         /// <summary>How far the render frame is between the last two physics steps (1 before the first step).</summary>
         internal float PhysicsInterpolation =>
             owner.hasPrevPhysicsState ? System.Math.Clamp(owner.physicsAccumulator / FixedTimestep, 0, 1) : 1;
+
+        // a6-3
+        /// <summary>The rig is no longer resting: keep it stepping for the settle window (the stepping loop).</summary>
+        internal void BeginBiomechanicalSettle() => owner.BeginBiomechanicalSettle();
+        /// <summary>The external rigs (garments still worn) that ride along when the standing hold moves the rig, and
+        /// moving them by the rig's delta (external bodies).</summary>
+        internal void CollectCarriedExternalRigs() => owner.CollectCarriedExternalRigs();
+        internal void TranslateCarriedExternalRigs(Vector3 correction, Vector3 anchorVelocity) =>
+            owner.TranslateCarriedExternalRigs(correction, anchorVelocity);
     }
 }
