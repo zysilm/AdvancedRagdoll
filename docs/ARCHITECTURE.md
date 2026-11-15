@@ -144,7 +144,7 @@ for bit. What the split left on the ragdoll itself is described at the end ([Sta
   (`simulation`, `ragdollBones`, `settings`, `skelWorldPos`, ...). Forwarders to a component's fields are read-only;
   forwarders to the context's vector and quaternion fields return them by reference, so a member write or a mutating
   call reaches the field and not a copy.
-- **No calls back into the ragdoll.** Until A6-12 a component reached the code that was not split yet through one small
+- **No calls back into the ragdoll.** (The recorded mesh source and the recorded random source in the context still wrap the ragdoll's recording state.) Until A6-12 a component reached the code that was not split yet through one small
   object, `CoreCalls`; the last three members (the two mesh-cache reads and the frozen mesh capture) went in A6-13 and
   the class is gone. A component that needs another component is handed it in its constructor; these are the explicit
   dependencies:
@@ -187,7 +187,7 @@ definitions, mod soft-tissue bones, severed limbs) stayed in the ragdoll until A
 Since A6-3 the context also holds whether the ragdoll is active, the rig's total mass, the active class profile and a
 body lookup by bone name. Where a component would need another subsystem's state or a recorded API call, the ragdoll's
 own method does that step and passes the value in (for example whether a grab or the standing support holds the rig, or
-the attachment a grab resolved), so the components do not reference each other. The ragdoll's direct pokes (impulse,
+the attachment a grab resolved), so the components do not reference each other (A6-13 later made a few such references explicit; see the dependency table above). The ragdoll's direct pokes (impulse,
 angular kick, punt, shake) and the grab-attachment queries stay with the ragdoll.
 
 <!-- a6-4 -->

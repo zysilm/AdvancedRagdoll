@@ -21,7 +21,8 @@ public unsafe partial class Ragdoll
     /// component in its constructor. The ragdoll's own code (the recorded layer, the activation flow, the step
     /// sequence) reaches the same fields through forwarding properties (Ragdoll.cs). Only what a component needs lives
     /// here. A component that needs another component is handed it in its constructor (docs/ARCHITECTURE.md §8);
-    /// nothing reaches back into the ragdoll.
+    /// no component calls back into the ragdoll's own methods. (Two context services still wrap the ragdoll's recording
+    /// state: the recorded mesh source and the recorded random source.)
     /// </summary>
     private sealed class SimulationContext
     {
