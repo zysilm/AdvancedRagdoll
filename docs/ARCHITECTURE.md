@@ -192,3 +192,18 @@ those calls between the component's steps: beginning is split into a check (rig 
 and a step that stops the pattern returns that to the ragdoll, which walks a collapse profile's controllers itself so a
 controller that releases the rig stops it at the same point. The entry conditioning's continuation is the ragdoll's
 recorded begin, handed in. The collapse profile book and the knee power-loss tuning stay with the ragdoll.
+
+<!-- a6-5 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `ExternalBodies` | `Ragdoll.ExternalBodies.cs` | the bodies and rigs added from outside (dropped gear, garments) with their generation stamp, the four contact filter sets the narrow phase reads for them, the rigs carried along with the standing hold |
+| `SoftTissue` | `Ragdoll.SoftTissue.cs` | the squash-and-stretch springs and the base scales they multiply, the soft-body leashes and their log budget |
+
+Since A6-5 the context also removes the constraints on a body before it is removed (`RemoveConstraintsOnBody`, used by
+the external bodies and the weapon-contact surfaces), and `CoreCalls` no longer carries constraint removal or the
+carrying of external rigs. The standing hold's anchor correction is a ragdoll method again: the component reports the
+correction, the ragdoll collects the worn rigs (a recorded decision), the component moves the rig, and the external
+bodies move the collected rigs by the same delta. What needs the settle window, the recorded external-body calls (a rig
+body's shape, removing a rig's bodies) or the weapon-contact surfaces stays in the ragdoll's own `*Core` method; the soft
+tissue gets the bone definitions and the frame counter passed in. The rig build still fills the leashes and resets the
+squash state through forwarding properties.

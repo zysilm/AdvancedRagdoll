@@ -95,7 +95,7 @@ public unsafe partial class Ragdoll
             if (ctx.Simulation != null && ctx.BufferPool != null)
                 foreach (var proxy in weaponContactProxies)
                 {
-                    ctx.Core.RemoveConstraintsOnBody(proxy.Body);
+                    ctx.RemoveConstraintsOnBody(proxy.Body);
                     try { ctx.Simulation.Bodies.Remove(proxy.Body); }
                     catch (Exception ex) { ctx.Log.Warning(ex, $"Ragdoll: failed to remove weapon contact surface {proxy.Body.Value}"); }
                     try { ctx.Simulation.Shapes.RemoveAndDispose(proxy.Shape, ctx.BufferPool); } catch { }
