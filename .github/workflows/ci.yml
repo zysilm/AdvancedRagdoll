@@ -94,3 +94,17 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet run --project tests/CollapseGolden -c Release
+
+  # Golden output of the contact paths (standing support, external bodies and rigs, grab, impacts, strikes, pokes),
+  # compared byte for byte. Windows only, for the same reason as weapon-drop-golden.
+  contact-golden:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet run --project tests/ContactGolden -c Release
