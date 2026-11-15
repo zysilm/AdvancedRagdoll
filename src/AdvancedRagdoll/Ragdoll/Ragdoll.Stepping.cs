@@ -240,30 +240,6 @@ public unsafe partial class Ragdoll
         }
     }
 
-    // Snapshot the current reconstructed bone world pose into the interpolation prev buffers,
-    // using the same capsule-center → bone-origin reconstruction as Pass 1. Called just before
-    // each physics tick so prev holds the pre-tick state to blend from.
-    private void CapturePrevBodyPoses(int boneCount)
-    {
-        for (int i = 0; i < boneCount; i++)
-        {
-            var rb = ragdollBones[i];
-            if (rb.BoneIndex < 0) continue;
-            var b = simulation!.Bodies.GetBodyReference(rb.BodyHandle);
-            prevWorldRotations![i] = Quaternion.Normalize(b.Pose.Orientation * rb.CapsuleToBoneOffset);
-            var profileOrigin = b.Pose.Position - Vector3.Transform(rb.ShapeCenterOffset, b.Pose.Orientation);
-            if (rb.SegmentHalfLength > 0)
-            {
-                var y = Vector3.Transform(Vector3.UnitY, b.Pose.Orientation);
-                prevWorldPositions![i] = profileOrigin - rb.SegmentHalfLength * y;
-            }
-            else
-            {
-                prevWorldPositions![i] = profileOrigin;
-            }
-        }
-    }
-
     /// <summary>
     /// True when the ragdoll target is still a live object. Matches against the object table rather
     /// than dereferencing <see cref="targetCharacterAddress"/> — once the actor is freed, its memory
@@ -631,13 +607,8 @@ public unsafe partial class Ragdoll
         // Ensure per-frame buffers exist (cur reconstruction + interpolation prev), sized to
         // the bone count. Allocated here (before stepping) so prev can be snapshotted in the loop.
         var boneCount = ragdollBones.Count;
-        if (cachedWorldPositions == null || cachedWorldPositions.Length < boneCount)
+        if (poseWriter.EnsureBuffers(boneCount))
         {
-            cachedWorldPositions = new Vector3[boneCount];
-            cachedWorldRotations = new Quaternion[boneCount];
-            cachedBoneValid = new bool[boneCount];
-            prevWorldPositions = new Vector3[boneCount];
-            prevWorldRotations = new Quaternion[boneCount];
             hasPrevPhysicsState = false; // buffers reallocated — old snapshot is stale
         }
 
@@ -679,7 +650,7 @@ public unsafe partial class Ragdoll
             {
                 // Snapshot the pre-tick bone pose for render interpolation. Overwritten each
                 // iteration, so it ends as the state immediately before the final tick.
-                CapturePrevBodyPoses(boneCount);
+                poseWriter.CapturePrevBodyPoses(boneCount);
                 hasPrevPhysicsState = true;
                 DriveGrabConstraints(FixedTimestep); // advance finite-force targets before solve
                 meshVolumes.ApplyCachedMeshLod();
@@ -748,69 +719,20 @@ public unsafe partial class Ragdoll
 
         var pose = skel.ModelPose;
 
-        // Save original positions/rotations for delta tracking (needed for head propagation).
-        // Reuse a cached result across frames — StepAndApply runs every render frame, so a
-        // fresh allocation here is steady GC pressure per active ragdoll.
-        var result = cachedResult ??= new BoneModificationResult(skel.BoneCount);
-        result.Reset(skel.BoneCount);
-        for (int i = 0; i < skel.BoneCount; i++)
-        {
-            ref var m = ref pose[i];
-            result.OriginalPositions[i] = new Vector3(m.Translation.X, m.Translation.Y, m.Translation.Z);
-            result.OriginalRotations[i] = new Quaternion(m.Rotation.X, m.Rotation.Y, m.Rotation.Z, m.Rotation.W);
-        }
+        poseWriter.BeginFrame(skel, pose);
 
         frameCount++;
         var logThisFrame = settings.RagdollVerboseLog && (frameCount <= 3 || frameCount % 12 == 0);
 
-        // --- Pass 1: Read physics bodies, compute bone world positions/rotations ---
-        // We need all positions first to measure how far the ragdoll sank below
-        // the real terrain (due to the lowered physics ground), then correct uniformly.
-        var worldPositions = cachedWorldPositions;
-        var worldRotations = cachedWorldRotations!;
-        var boneValid = cachedBoneValid!;
-        Array.Clear(boneValid, 0, boneCount);
-        var anyAwake = false;
-
-        for (int i = 0; i < boneCount; i++)
+        // Pass 1 (the pose writer): read every body's bone world pose. A body that is not finite deactivates the
+        // ragdoll instead of reaching the mesh.
+        if (poseWriter.ReadBodies(skel, boneCount, out var anyAwake) == PoseWriter.BodyReadOutcome.NotFinite)
         {
-            var rb = ragdollBones[i];
-            if (rb.BoneIndex < 0 || rb.BoneIndex >= skel.BoneCount) continue;
-
-            var bodyRef = simulation.Bodies.GetBodyReference(rb.BodyHandle);
-            if (bodyRef.Awake) anyAwake = true;
-
-            // Guard against NaN from physics explosion — deactivate instead of crashing.
-            // Sum-check covers ALL pose components: a NaN in Orientation.X/Y/Z with a finite W
-            // used to slip through for one frame and reach the mesh as garbage vertices.
-            if (float.IsNaN(bodyRef.Pose.Position.X + bodyRef.Pose.Position.Y + bodyRef.Pose.Position.Z +
-                            bodyRef.Pose.Orientation.X + bodyRef.Pose.Orientation.Y +
-                            bodyRef.Pose.Orientation.Z + bodyRef.Pose.Orientation.W))
-            {
-                log.Warning($"Ragdoll: NaN detected in body '{rb.Name}', deactivating");
-                Deactivate();
-                return;
-            }
-
-            // Reconstruct bone world rotation from physics capsule rotation + stored offset
-            worldRotations[i] = Quaternion.Normalize(bodyRef.Pose.Orientation * rb.CapsuleToBoneOffset);
-
-            // Convert capsule center (at segment midpoint) back to bone origin position.
-            // The bone is at the parent-end of the capsule: center - halfLength * capsuleY.
-            var profileOrigin = bodyRef.Pose.Position -
-                                Vector3.Transform(rb.ShapeCenterOffset, bodyRef.Pose.Orientation);
-            if (rb.SegmentHalfLength > 0)
-            {
-                var capsuleYAxis = Vector3.Transform(Vector3.UnitY, bodyRef.Pose.Orientation);
-                worldPositions[i] = profileOrigin - rb.SegmentHalfLength * capsuleYAxis;
-            }
-            else
-            {
-                worldPositions[i] = profileOrigin;
-            }
-
-            boneValid[i] = true;
+            Deactivate();
+            return;
         }
+        var worldPositions = poseWriter.WorldPositions;
+        var boneValid = poseWriter.BoneValid;
         if (AnyExternalBodyAwake() || hairRig.NeedsStep) anyAwake = true;
 
         EnsureTerrainPatchCoverage(worldPositions, boneValid, boneCount);
@@ -854,70 +776,9 @@ public unsafe partial class Ragdoll
                      $"maxLinVel={maxLinVel:F3} maxAngVel={maxAngVel:F3}");
         }
 
-        // --- Pass 2: Apply correction and write to ModelPose ---
-        for (int i = 0; i < boneCount; i++)
-        {
-            if (!boneValid[i]) continue;
-            var rb = ragdollBones[i];
-
-            // Blend from the previous physics tick toward the current one for smooth motion
-            // between 60Hz ticks. At alpha = 1 these return the current pose exactly.
-            var boneWorldPos = renderAlpha >= 1f
-                ? worldPositions[i]
-                : Vector3.Lerp(prevWorldPositions![i], worldPositions[i], renderAlpha);
-            var boneWorldRot = renderAlpha >= 1f
-                ? worldRotations[i]
-                : Quaternion.Slerp(prevWorldRotations![i], worldRotations[i], renderAlpha);
-            boneWorldPos.Y += yCorrection;
-
-            var modelPos = WorldToModel(boneWorldPos);
-            var modelRot = WorldRotToModel(boneWorldRot);
-
-            if (logThisFrame)
-            {
-                var bodyRef = simulation.Bodies.GetBodyReference(rb.BodyHandle);
-                var wr = worldRotations[i];
-                var lv = bodyRef.Velocity.Linear;
-                var av = bodyRef.Velocity.Angular;
-                log.Info($"[Ragdoll F{frameCount}] '{rb.Name}' " +
-                         $"wPos=({boneWorldPos.X:F3},{boneWorldPos.Y:F3},{boneWorldPos.Z:F3}) " +
-                         $"wRot=({wr.X:F3},{wr.Y:F3},{wr.Z:F3},{wr.W:F3}) " +
-                         $"linV=({lv.X:F3},{lv.Y:F3},{lv.Z:F3}) angV=({av.X:F3},{av.Y:F3},{av.Z:F3}) " +
-                         $"awake={bodyRef.Awake}");
-            }
-
-            WriteBoneTransform(skel, rb.BoneIndex, modelPos, modelRot, result);
-        }
-
-        // Propagate ragdoll movement to non-ragdoll descendant bones (hands, fingers, toes).
-        // Without this, these bones stay at their frozen animation positions while their
-        // ragdoll parent bones move via physics, causing mesh tearing at boundaries.
-        for (int i = 0; i < skel.BoneCount && i < skel.ParentCount; i++)
-        {
-            if (ragdollBoneIndices.Contains(i)) continue; // already handled by physics
-
-            var parentIdx = skel.Parent(i);
-            if (parentIdx < 0 || !result.HasAccumulated[parentIdx]) continue;
-
-            var parentDelta = result.AccumulatedDeltas[parentIdx];
-            var parentOrigPos = result.OriginalPositions[parentIdx];
-            ref var parentModel = ref pose[parentIdx];
-            var parentNewPos = new Vector3(parentModel.Translation.X, parentModel.Translation.Y, parentModel.Translation.Z);
-
-            // Rotate this bone around its parent's original position, then translate by parent displacement
-            var relPos = result.OriginalPositions[i] - parentOrigPos;
-            relPos = Vector3.Transform(relPos, parentDelta);
-            var newPos = parentOrigPos + relPos + (parentNewPos - parentOrigPos);
-            var newRot = Quaternion.Normalize(parentDelta * result.OriginalRotations[i]);
-
-            WriteBoneTransform(skel, i, newPos, newRot, result);
-        }
-
-        // Propagate head changes to face/hair partial skeletons
-        if (kaoBodyBoneIndex >= 0 && result.HasAccumulated[kaoBodyBoneIndex])
-        {
-            PropagateToPartialSkeletons(skel, kaoBodyBoneIndex, skeletonProfile.Landmarks.Head, result);
-        }
+        // Pass 2 (the pose writer): write the bones, blended from the previous tick, and carry the motion to the
+        // bones without a body and to the partial skeletons on the head.
+        poseWriter.WritePose(skel, pose, boneCount, renderAlpha, yCorrection, logThisFrame, frameCount);
 
         // Soft-tissue squash & stretch: annotate per-bone scale after every positional write
         // of the frame (position/rotation writes leave the scale channel untouched, so order
@@ -928,9 +789,7 @@ public unsafe partial class Ragdoll
         // vanishes from the body (the "hide" half of hide-and-substitute). Done last so it overrides
         // the physics/propagation writes for those bones.
         var severedBones = useLocalDismemberBones ? localDismemberBones : settings.DismemberPocBones;
-        if (severedBones != null && severedBones.Count > 0)
-            foreach (var boneName in severedBones)
-                HideLimbSubtree(skel, boneName);
+        poseWriter.HideSeveredLimbs(skel, severedBones);
 
         // Reassert flexible hair after head propagation, including settled frames.
         if (hairRig.Active) hairRig.Readback(skel);

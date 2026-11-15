@@ -236,3 +236,19 @@ no longer carries the settle window, the liveness check, the live-hair flag or t
 creates each joint's own constraints (ball sockets, hinges, swivel hinges, cones, twist limits, servos, motors) inline,
 in the same order, and calls the joint model for the anatomical additions at the same points; it records the motors
 and swing limits for the release through forwarding properties. Moving that loop belongs to the rig build stage.
+
+<!-- a6-8 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `SkeletonReader` | `Ragdoll.Skeleton.cs` | reading the host skeleton into the rig's bone definitions (the profile's humanoid set, the generated set for a non-humanoid skeleton, the soft-tissue bones discovered on it, the bodies left out for severed limbs); the definitions the active rig was built from; the severed-limb selection |
+| `PoseWriter` | `Ragdoll.PoseWriting.cs` | the per-frame pose write-back: the bone buffers (this tick's body poses, the previous tick's for render interpolation, the originals and deltas of the frame), the rig's bone index set and the head bone index; reading the bodies, writing the simulated bones, carrying their motion to the bones without a body and to the partial skeletons on the head, collapsing severed limbs |
+
+The stepping loop calls the pose writer at the old points and makes everything else between its steps: it decides when
+the previous tick is captured (and whether that snapshot is still valid) and how far to blend, so the interpolation
+flag stays with the stepping loop; a body that is not finite is reported back (`BodyReadOutcome`) and the ragdoll
+deactivates itself; the external-body and hair wake checks, the terrain patches, the frame summary log, the soft-tissue
+squash, the hair read-back, the written-pose record and the follow transform stay in the stepping loop. The rig build
+fills the active definitions, the bone index set and the head index through forwarding properties. The stateless parts
+stay static on the ragdoll: the bone-class tests, the profile defaults and the bone-definition builder from the
+configurations (the host reads them as `Ragdoll` members), bone lookup by name, and the model/world conversions
+(`Ragdoll.Transforms.cs`). Neither component calls into the core: `CoreCalls` is unchanged.

@@ -16,338 +16,495 @@ namespace AdvancedRagdoll;
 
 public unsafe partial class Ragdoll
 {
-    /// <summary>
-    /// Bone definitions for the mesh-aware humanoid rig: the built-in profile, filtered to enabled
-    /// bones with physics parents computed. Collider dimensions come from the body mesh fit.
-    /// </summary>
-    private RagdollBoneDef[] GetBoneDefs() => BuildBoneDefsFromConfigs(skeletonProfile, boneDefaults, boneDefaults);
+    // Reading the host skeleton into the rig's bone definitions: the profile's humanoid set, the generated set for a
+    // non-humanoid skeleton, the soft-tissue bones found on it, the limbs left out when severed, and the definitions
+    // the active rig was built from (Ragdoll.Skeleton.cs).
+    private readonly SkeletonReader skeletonReader;
 
-    // Structural bones every humanoid skeleton has (the profile's signature bones). If all resolve,
-    // the hand-tuned human profile fits and the existing passes run unchanged. If any is missing
-    // (bats, birds, dragons, quadrupeds, voidsent) the skeleton is treated as non-humanoid and gets
-    // a generated ragdoll instead (SkeletonProfile.Auto).
-    private ImmutableArray<string> HumanoidSignatureBones => skeletonProfile.SignatureBones;
+    // a6-8: the definitions of the active rig and the severed-limb selection live in the skeleton reader.
+    private Dictionary<string, RagdollBoneDef> activeDefByName => skeletonReader.ActiveDefByName;
+    private ref bool useLocalDismemberBones => ref skeletonReader.UseLocalDismemberBones;
+    private List<string> localDismemberBones => skeletonReader.LocalDismemberBones;
+
+    private RagdollBoneDef[] GetBoneDefs() => skeletonReader.GetBoneDefs();
 
     private bool IsHumanoidSkeleton(Dictionary<string, int> humanNameToIndex)
-    {
-        // An automatic profile has no humanoid table: every skeleton gets a generated rig.
-        if (skeletonProfile.IsAuto) return false;
-        foreach (var bone in HumanoidSignatureBones)
-            if (!humanNameToIndex.ContainsKey(bone))
-                return false;
-        return true;
-    }
+        => skeletonReader.IsHumanoidSkeleton(humanNameToIndex);
 
-    private bool IsNpcHumanoidSkeleton(IHostSkeleton skel)
-    {
-        if (skeletonProfile.IsAuto) return false;
-        foreach (var bone in HumanoidSignatureBones)
-            if (ResolveBoneIndex(skel, bone) < 0)
-                return false;
-        return true;
-    }
-
-    /// <summary>
-    /// Build a ragdoll bone definition set from a skeleton's real topology, for
-    /// non-humanoid characters where the human profile does not fit. Capsule size
-    /// and mass scale with actual bone lengths (so small rigs like bats do not get
-    /// oversized human capsules that explode), parents follow the real skeleton
-    /// hierarchy (no human-name mapping, so no orphaning), and all joints are loose
-    /// ball joints. The returned defs feed the same Pass 1/2/3 body/constraint build
-    /// and StepAndApply write-back as the human path.
-    /// </summary>
     private (RagdollBoneDef[] Defs, Dictionary<string, int> NameToIndex) BuildGenericSkeletonDefs(IHostSkeleton skel)
-    {
-        var genericRig = SkeletonProfile.Auto().GenericRig!;
-        var pose = skel.ModelPose;
-        int n = skel.BoneCount;
-        int pc = skel.ParentCount;
+        => skeletonReader.BuildGenericSkeletonDefs(skel);
 
-        // World position of every bone in the current (death) pose.
-        var wpos = new Vector3[n];
-        for (int i = 0; i < n; i++)
-        {
-            ref var mt = ref pose[i];
-            wpos[i] = new Vector3(mt.Translation.X, mt.Translation.Y, mt.Translation.Z);
-        }
-
-        int ParentOf(int i) => (i >= 0 && i < pc) ? skel.Parent(i) : -1;
-
-        // Distance to direct parent, and the longest child segment a bone owns.
-        var distToParent = new float[n];
-        var longestChildLen = new float[n];
-        for (int i = 0; i < n; i++)
-        {
-            int p = ParentOf(i);
-            if (p < 0 || p >= n) continue;
-            var d = Vector3.Distance(wpos[i], wpos[p]);
-            distToParent[i] = d;
-            if (d > longestChildLen[p]) longestChildLen[p] = d;
-        }
-
-        // Adaptive min-segment threshold scaled to the skeleton's own size: a fraction of
-        // its largest segment, clamped to [floor, cap]. Big rigs (toad, longest segment
-        // ~1.7m) land at the cap and stay sparse; small rigs (bat, ~0.2m) drop to the floor
-        // so their wing/limb bones are simulated instead of being skipped as "twigs".
-        float maxSegment = 0f;
-        for (int i = 0; i < n; i++)
-            if (longestChildLen[i] > maxSegment) maxSegment = longestChildLen[i];
-        float minSegment = Math.Clamp(maxSegment * genericRig.MinSegmentFactor, genericRig.MinSegmentFloor, genericRig.MinSegmentCap);
-        log.Info($"Ragdoll: generic min-segment threshold {minSegment:F3}m (skeleton largest segment {maxSegment:F3}m)");
-
-        // A bone gets a body if it owns a real forward segment. Coincident/twig bones
-        // (fingers, tips) are skipped and follow via StepAndApply propagation.
-        var significant = new bool[n];
-        int significantCount = 0;
-        for (int i = 0; i < n; i++)
-        {
-            if (longestChildLen[i] >= minSegment)
-            {
-                significant[i] = true;
-                significantCount++;
-            }
-        }
-
-        // Cap body count on large rigs: keep the longest segments, but force-keep the
-        // significant ancestors of kept bones so the constraint tree stays connected
-        // (a kept bone whose ancestors were dropped would become a free-floating root).
-        if (significantCount > genericRig.MaxBodies)
-        {
-            var ranked = new List<int>();
-            for (int i = 0; i < n; i++)
-                if (significant[i]) ranked.Add(i);
-            ranked.Sort((a, b) => longestChildLen[b].CompareTo(longestChildLen[a]));
-
-            var keep = new bool[n];
-            for (int k = 0; k < genericRig.MaxBodies && k < ranked.Count; k++)
-            {
-                keep[ranked[k]] = true;
-                int p = ParentOf(ranked[k]);
-                while (p >= 0)
-                {
-                    if (significant[p]) keep[p] = true;
-                    p = ParentOf(p);
-                }
-            }
-            for (int i = 0; i < n; i++)
-                significant[i] = significant[i] && keep[i];
-        }
-
-        int SignificantAncestor(int i)
-        {
-            int p = ParentOf(i);
-            while (p >= 0)
-            {
-                if (significant[p]) return p;
-                p = ParentOf(p);
-            }
-            return -1;
-        }
-
-        string Name(int i) => "gen_" + i.ToString();
-
-        var simIndices = new List<int>();
-        for (int i = 0; i < n; i++)
-            if (significant[i]) simIndices.Add(i);
-
-        // Emit roots first, then longest-from-parent first, so boneToFirstChild picks
-        // each bone's longest child as its capsule axis (best rotational stability).
-        simIndices.Sort((a, b) =>
-        {
-            bool aRoot = SignificantAncestor(a) < 0;
-            bool bRoot = SignificantAncestor(b) < 0;
-            if (aRoot != bRoot) return aRoot ? -1 : 1;
-            return distToParent[b].CompareTo(distToParent[a]);
-        });
-
-        var nameToIndex = new Dictionary<string, int>();
-        foreach (var i in simIndices)
-            nameToIndex[Name(i)] = i;
-
-        var defs = new List<RagdollBoneDef>(simIndices.Count);
-        foreach (var i in simIndices)
-        {
-            float segLen = MathF.Max(longestChildLen[i], minSegment);
-            int anc = SignificantAncestor(i);
-            defs.Add(new RagdollBoneDef
-            {
-                Name = Name(i),
-                ParentName = anc >= 0 ? Name(anc) : null,
-                CapsuleRadius = Math.Clamp(segLen * 0.28f, 0.02f, 0.18f),
-                CapsuleHalfLength = segLen * 0.45f,
-                Mass = Math.Clamp(segLen * 20f, 0.5f, 12f),
-                SwingLimit = genericRig.SwingLimit,
-                Joint = JointType.Ball,
-                TwistMinAngle = -genericRig.TwistLimit,
-                TwistMaxAngle = genericRig.TwistLimit,
-                AnatomicalRole = SkeletonBoneRole.Generic,
-                ColliderShape = RagdollColliderShape.Capsule,
-                BoxHalfExtents = new Vector3(Math.Clamp(segLen * 0.28f, 0.02f, 0.18f), segLen * 0.45f, Math.Clamp(segLen * 0.28f, 0.02f, 0.18f)),
-            });
-        }
-
-        return (defs.ToArray(), nameToIndex);
-    }
-
-    // Cap on discovered soft-tissue bodies. Standard (mod bones) needs ~59 on a fully
-    // modded body skeleton; All bones adds every remaining vanilla bone (~60 more on a human body
-    // skeleton), so 128 leaves headroom without letting an exotic rig double past it.
-    private const int MaxModSoftTissueBones = 128;
-
-    /// <summary>
-    /// Discover extra bones and append them as SoftBody jiggle defs. Coverage Standard takes
-    /// mod-skeleton bones (the extra soft-tissue bones some skeletons add, matched by prefix) except fingers and toes;
-    /// coverage All takes EVERY skeleton bone that is not already a rig body, vanilla included.
-    /// Body meshes are
-    /// weighted to these bones, so driving them restores the secondary motion the game's own
-    /// physics simulation provides in life (our pose overwrite suppresses it during ragdoll).
-    /// Anchoring: each discovered bone attaches to its nearest ancestor that is (or has just
-    /// become) a rig def, so open chains hang link by link while isolated bones anchor
-    /// straight to the torso bone that carries them.
-    /// </summary>
     private RagdollBoneDef[] AppendModSoftTissueDefs(
         IHostSkeleton skel,
         RagdollBoneDef[] defs,
         Dictionary<string, int> nameToIndex,
         Dictionary<string, RagdollBoneDef> defByName)
+        => skeletonReader.AppendModSoftTissueDefs(skel, defs, nameToIndex, defByName);
+
+    private void SetDismemberedBonesCore(IEnumerable<string> bones) => skeletonReader.SetDismemberedBones(bones);
+
+    private RagdollBoneDef[] BuildActivePhysicsDefsForDismemberment(
+        IHostSkeleton skel,
+        RagdollBoneDef[] defs,
+        Dictionary<string, int> activeNameToIndex)
+        => skeletonReader.BuildActivePhysicsDefsForDismemberment(skel, defs, activeNameToIndex);
+
+    /// <summary>
+    /// Reads the host skeleton into the rig's bone definitions (the profile's humanoid set, a generated set for a
+    /// non-humanoid skeleton, the soft-tissue bones discovered on it, the limbs left out when severed) and keeps the
+    /// definitions the active rig was built from and the severed-limb selection. A component (docs/ARCHITECTURE.md
+    /// §8). The rig build fills <see cref="ActiveDefByName"/>; the stateless bone-class and profile-default helpers
+    /// below stay static on the ragdoll.
+    /// </summary>
+    private sealed class SkeletonReader
     {
-        // Coverage: Standard = mod-skeleton bones only (prefix match), excluding digits;
-        // All = every bone; All-except-digits = every bone but the fingers and toes.
-        // Digits should normally inherit the hand/foot pose rather than use the generic,
-        // deliberately loose soft-tissue constraints.
-        var scope = settings.RagdollSoftTissueScope;
-        var allBones = scope == 1 || scope == 2;
-        var excludeDigits = scope != 1;
+        private readonly SimulationContext ctx;
 
-        var prefixes = new List<string>();
-        foreach (var part in settings.RagdollSoftTissueBonePrefixes.Split(','))
+        internal SkeletonReader(SimulationContext ctx) { this.ctx = ctx; }
+
+        private HostSettings settings => ctx.Settings;
+        private IMeshSource meshes => ctx.Meshes;
+        private IRagdollLog log => ctx.Log;
+        private SkeletonProfile skeletonProfile => ctx.Profile;
+        private RagdollBoneConfig[] boneDefaults => ctx.BoneDefaults;
+
+        // Bone defs actually used for the active ragdoll, keyed by name. For humanoid
+        // skeletons these are the tuned human defs; for non-humanoid skeletons they are
+        // generated from the real skeleton topology (see BuildGenericSkeletonDefs).
+        // StepAndApply reads capsule extents from here instead of re-deriving the human set.
+        private readonly Dictionary<string, RagdollBoneDef> activeDefByName = new();
+        private bool useLocalDismemberBones;
+        private readonly List<string> localDismemberBones = new();
+
+        internal Dictionary<string, RagdollBoneDef> ActiveDefByName => activeDefByName;
+        internal ref bool UseLocalDismemberBones => ref useLocalDismemberBones;
+        internal List<string> LocalDismemberBones => localDismemberBones;
+
+        /// <summary>
+        /// Bone definitions for the mesh-aware humanoid rig: the built-in profile, filtered to enabled
+        /// bones with physics parents computed. Collider dimensions come from the body mesh fit.
+        /// </summary>
+        internal RagdollBoneDef[] GetBoneDefs() => BuildBoneDefsFromConfigs(skeletonProfile, boneDefaults, boneDefaults);
+
+        // Structural bones every humanoid skeleton has (the profile's signature bones). If all resolve,
+        // the hand-tuned human profile fits and the existing passes run unchanged. If any is missing
+        // (bats, birds, dragons, quadrupeds, voidsent) the skeleton is treated as non-humanoid and gets
+        // a generated ragdoll instead (SkeletonProfile.Auto).
+        private ImmutableArray<string> HumanoidSignatureBones => skeletonProfile.SignatureBones;
+
+        internal bool IsHumanoidSkeleton(Dictionary<string, int> humanNameToIndex)
         {
-            var trimmed = part.Trim();
-            if (trimmed.Length > 0) prefixes.Add(trimmed);
+            // An automatic profile has no humanoid table: every skeleton gets a generated rig.
+            if (skeletonProfile.IsAuto) return false;
+            foreach (var bone in HumanoidSignatureBones)
+                if (!humanNameToIndex.ContainsKey(bone))
+                    return false;
+            return true;
         }
-        if (!allBones && prefixes.Count == 0) return defs;
 
-        int n = Math.Min(skel.BoneCount, skel.BoneNameCount);
-        int pc = skel.ParentCount;
-
-        var known = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var d in defs) known.Add(d.Name);
-
-        // Fit the dynamically discovered bodies to the vertices that the rendered body mesh
-        // actually skins to them.  The old estimator measured all the way to the nearest active
-        // ragdoll ancestor; helper chains often skip several skeleton nodes, so that distance had
-        // almost no relationship to the flesh region and routinely produced the maximum capsule.
-        var fitCandidates = new HashSet<int>();
-        for (int i = 0; i < n && i < pc; i++)
+        internal bool IsNpcHumanoidSkeleton(IHostSkeleton skel)
         {
-            var candidateName = skel.BoneName(i);
-            if (candidateName == null || known.Contains(candidateName))
-                continue;
+            if (skeletonProfile.IsAuto) return false;
+            foreach (var bone in HumanoidSignatureBones)
+                if (ResolveBoneIndex(skel, bone) < 0)
+                    return false;
+            return true;
+        }
 
-            if (!allBones)
+        /// <summary>
+        /// Build a ragdoll bone definition set from a skeleton's real topology, for
+        /// non-humanoid characters where the human profile does not fit. Capsule size
+        /// and mass scale with actual bone lengths (so small rigs like bats do not get
+        /// oversized human capsules that explode), parents follow the real skeleton
+        /// hierarchy (no human-name mapping, so no orphaning), and all joints are loose
+        /// ball joints. The returned defs feed the same Pass 1/2/3 body/constraint build
+        /// and StepAndApply write-back as the human path.
+        /// </summary>
+        internal (RagdollBoneDef[] Defs, Dictionary<string, int> NameToIndex) BuildGenericSkeletonDefs(IHostSkeleton skel)
+        {
+            var genericRig = SkeletonProfile.Auto().GenericRig!;
+            var pose = skel.ModelPose;
+            int n = skel.BoneCount;
+            int pc = skel.ParentCount;
+
+            // World position of every bone in the current (death) pose.
+            var wpos = new Vector3[n];
+            for (int i = 0; i < n; i++)
             {
-                var matched = false;
-                foreach (var prefix in prefixes)
-                    if (candidateName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                ref var mt = ref pose[i];
+                wpos[i] = new Vector3(mt.Translation.X, mt.Translation.Y, mt.Translation.Z);
+            }
+
+            int ParentOf(int i) => (i >= 0 && i < pc) ? skel.Parent(i) : -1;
+
+            // Distance to direct parent, and the longest child segment a bone owns.
+            var distToParent = new float[n];
+            var longestChildLen = new float[n];
+            for (int i = 0; i < n; i++)
+            {
+                int p = ParentOf(i);
+                if (p < 0 || p >= n) continue;
+                var d = Vector3.Distance(wpos[i], wpos[p]);
+                distToParent[i] = d;
+                if (d > longestChildLen[p]) longestChildLen[p] = d;
+            }
+
+            // Adaptive min-segment threshold scaled to the skeleton's own size: a fraction of
+            // its largest segment, clamped to [floor, cap]. Big rigs (toad, longest segment
+            // ~1.7m) land at the cap and stay sparse; small rigs (bat, ~0.2m) drop to the floor
+            // so their wing/limb bones are simulated instead of being skipped as "twigs".
+            float maxSegment = 0f;
+            for (int i = 0; i < n; i++)
+                if (longestChildLen[i] > maxSegment) maxSegment = longestChildLen[i];
+            float minSegment = Math.Clamp(maxSegment * genericRig.MinSegmentFactor, genericRig.MinSegmentFloor, genericRig.MinSegmentCap);
+            log.Info($"Ragdoll: generic min-segment threshold {minSegment:F3}m (skeleton largest segment {maxSegment:F3}m)");
+
+            // A bone gets a body if it owns a real forward segment. Coincident/twig bones
+            // (fingers, tips) are skipped and follow via StepAndApply propagation.
+            var significant = new bool[n];
+            int significantCount = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (longestChildLen[i] >= minSegment)
+                {
+                    significant[i] = true;
+                    significantCount++;
+                }
+            }
+
+            // Cap body count on large rigs: keep the longest segments, but force-keep the
+            // significant ancestors of kept bones so the constraint tree stays connected
+            // (a kept bone whose ancestors were dropped would become a free-floating root).
+            if (significantCount > genericRig.MaxBodies)
+            {
+                var ranked = new List<int>();
+                for (int i = 0; i < n; i++)
+                    if (significant[i]) ranked.Add(i);
+                ranked.Sort((a, b) => longestChildLen[b].CompareTo(longestChildLen[a]));
+
+                var keep = new bool[n];
+                for (int k = 0; k < genericRig.MaxBodies && k < ranked.Count; k++)
+                {
+                    keep[ranked[k]] = true;
+                    int p = ParentOf(ranked[k]);
+                    while (p >= 0)
                     {
-                        matched = true;
+                        if (significant[p]) keep[p] = true;
+                        p = ParentOf(p);
+                    }
+                }
+                for (int i = 0; i < n; i++)
+                    significant[i] = significant[i] && keep[i];
+            }
+
+            int SignificantAncestor(int i)
+            {
+                int p = ParentOf(i);
+                while (p >= 0)
+                {
+                    if (significant[p]) return p;
+                    p = ParentOf(p);
+                }
+                return -1;
+            }
+
+            string Name(int i) => "gen_" + i.ToString();
+
+            var simIndices = new List<int>();
+            for (int i = 0; i < n; i++)
+                if (significant[i]) simIndices.Add(i);
+
+            // Emit roots first, then longest-from-parent first, so boneToFirstChild picks
+            // each bone's longest child as its capsule axis (best rotational stability).
+            simIndices.Sort((a, b) =>
+            {
+                bool aRoot = SignificantAncestor(a) < 0;
+                bool bRoot = SignificantAncestor(b) < 0;
+                if (aRoot != bRoot) return aRoot ? -1 : 1;
+                return distToParent[b].CompareTo(distToParent[a]);
+            });
+
+            var nameToIndex = new Dictionary<string, int>();
+            foreach (var i in simIndices)
+                nameToIndex[Name(i)] = i;
+
+            var defs = new List<RagdollBoneDef>(simIndices.Count);
+            foreach (var i in simIndices)
+            {
+                float segLen = MathF.Max(longestChildLen[i], minSegment);
+                int anc = SignificantAncestor(i);
+                defs.Add(new RagdollBoneDef
+                {
+                    Name = Name(i),
+                    ParentName = anc >= 0 ? Name(anc) : null,
+                    CapsuleRadius = Math.Clamp(segLen * 0.28f, 0.02f, 0.18f),
+                    CapsuleHalfLength = segLen * 0.45f,
+                    Mass = Math.Clamp(segLen * 20f, 0.5f, 12f),
+                    SwingLimit = genericRig.SwingLimit,
+                    Joint = JointType.Ball,
+                    TwistMinAngle = -genericRig.TwistLimit,
+                    TwistMaxAngle = genericRig.TwistLimit,
+                    AnatomicalRole = SkeletonBoneRole.Generic,
+                    ColliderShape = RagdollColliderShape.Capsule,
+                    BoxHalfExtents = new Vector3(Math.Clamp(segLen * 0.28f, 0.02f, 0.18f), segLen * 0.45f, Math.Clamp(segLen * 0.28f, 0.02f, 0.18f)),
+                });
+            }
+
+            return (defs.ToArray(), nameToIndex);
+        }
+
+        // Cap on discovered soft-tissue bodies. Standard (mod bones) needs ~59 on a fully
+        // modded body skeleton; All bones adds every remaining vanilla bone (~60 more on a human body
+        // skeleton), so 128 leaves headroom without letting an exotic rig double past it.
+        private const int MaxModSoftTissueBones = 128;
+
+        /// <summary>
+        /// Discover extra bones and append them as SoftBody jiggle defs. Coverage Standard takes
+        /// mod-skeleton bones (the extra soft-tissue bones some skeletons add, matched by prefix) except fingers and toes;
+        /// coverage All takes EVERY skeleton bone that is not already a rig body, vanilla included.
+        /// Body meshes are
+        /// weighted to these bones, so driving them restores the secondary motion the game's own
+        /// physics simulation provides in life (our pose overwrite suppresses it during ragdoll).
+        /// Anchoring: each discovered bone attaches to its nearest ancestor that is (or has just
+        /// become) a rig def, so open chains hang link by link while isolated bones anchor
+        /// straight to the torso bone that carries them.
+        /// </summary>
+        internal RagdollBoneDef[] AppendModSoftTissueDefs(
+            IHostSkeleton skel,
+            RagdollBoneDef[] defs,
+            Dictionary<string, int> nameToIndex,
+            Dictionary<string, RagdollBoneDef> defByName)
+        {
+            // Coverage: Standard = mod-skeleton bones only (prefix match), excluding digits;
+            // All = every bone; All-except-digits = every bone but the fingers and toes.
+            // Digits should normally inherit the hand/foot pose rather than use the generic,
+            // deliberately loose soft-tissue constraints.
+            var scope = settings.RagdollSoftTissueScope;
+            var allBones = scope == 1 || scope == 2;
+            var excludeDigits = scope != 1;
+
+            var prefixes = new List<string>();
+            foreach (var part in settings.RagdollSoftTissueBonePrefixes.Split(','))
+            {
+                var trimmed = part.Trim();
+                if (trimmed.Length > 0) prefixes.Add(trimmed);
+            }
+            if (!allBones && prefixes.Count == 0) return defs;
+
+            int n = Math.Min(skel.BoneCount, skel.BoneNameCount);
+            int pc = skel.ParentCount;
+
+            var known = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var d in defs) known.Add(d.Name);
+
+            // Fit the dynamically discovered bodies to the vertices that the rendered body mesh
+            // actually skins to them.  The old estimator measured all the way to the nearest active
+            // ragdoll ancestor; helper chains often skip several skeleton nodes, so that distance had
+            // almost no relationship to the flesh region and routinely produced the maximum capsule.
+            var fitCandidates = new HashSet<int>();
+            for (int i = 0; i < n && i < pc; i++)
+            {
+                var candidateName = skel.BoneName(i);
+                if (candidateName == null || known.Contains(candidateName))
+                    continue;
+
+                if (!allBones)
+                {
+                    var matched = false;
+                    foreach (var prefix in prefixes)
+                        if (candidateName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                        {
+                            matched = true;
+                            break;
+                        }
+                    if (!matched)
+                        continue;
+                }
+
+                if (!excludeDigits || !IsDigitBone(skeletonProfile, candidateName))
+                    fitCandidates.Add(i);
+            }
+
+            var meshFits = fitCandidates.Count == 0
+                ? new Dictionary<int, SoftTissueMeshFit>()
+                : meshes.SoftTissueFits(skel.Actor, skel, fitCandidates, settings.RagdollVerboseLog);
+
+            List<RagdollBoneDef>? added = null;
+            // Havok skeletons are topologically ordered (parent before child), so chains resolve
+            // in one forward pass: by the time a child is visited its discovered parent is known.
+            for (int i = 0; i < n && i < pc; i++)
+            {
+                var name = skel.BoneName(i);
+                if (name == null || known.Contains(name)) continue;
+
+                if (!allBones)
+                {
+                    var matched = false;
+                    foreach (var prefix in prefixes)
+                        if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { matched = true; break; }
+                    if (!matched) continue;
+                }
+                if (excludeDigits && IsDigitBone(skeletonProfile, name))
+                {
+                    continue;
+                }
+
+                // Nearest ancestor that is a rig def (original or discovered) — the joint anchor.
+                // A match with no rig ancestor is skipped: it would orphan into a free body.
+                string? anchorName = null;
+                int p = skel.Parent(i);
+                while (p >= 0 && p < n)
+                {
+                    var pName = skel.BoneName(p);
+                    if (pName != null && known.Contains(pName)) { anchorName = pName; break; }
+                    p = p < pc ? skel.Parent(p) : -1;
+                }
+                if (anchorName == null || !nameToIndex.ContainsKey(anchorName))
+                    continue;
+
+                // A missing mesh cluster is deliberately a tiny inertial proxy.  It is safer to
+                // under-represent a helper bone than to fabricate a large torso-sized collider from
+                // hierarchy distance.  With a usable cluster, dimensions and center come entirely
+                // from the weighted model vertices.
+                var hasMeshFit = meshFits.TryGetValue(i, out var meshFit);
+                var radius = hasMeshFit ? meshFit.Radius : SoftTissueFallbackRadius;
+                var halfLength = hasMeshFit ? meshFit.HalfLength : SoftTissueFallbackHalfLength;
+
+                var def = new RagdollBoneDef
+                {
+                    Name = name,
+                    ParentName = anchorName,
+                    CapsuleRadius = radius,
+                    CapsuleHalfLength = halfLength,
+                    Mass = 0.1f,
+                    SwingLimit = 0.35f,
+                    Joint = JointType.Ball,
+                    AnatomicalRole = SkeletonBoneRole.SoftBody,
+                    ColliderShape = RagdollColliderShape.Capsule,
+                    SoftBody = true,
+                    SoftSpringFreq = 10f,
+                    SoftSpringDamp = 1f,
+                    SoftServoFreq = 3f,
+                    SoftServoDamp = 0.2f,
+                    HasMeshFit = hasMeshFit,
+                    MeshFitCenterModelOffset = hasMeshFit ? meshFit.CenterModelOffset : Vector3.Zero,
+                    MeshFitAxisModel = hasMeshFit ? meshFit.AxisModel : Vector3.UnitY,
+                };
+
+                (added ??= new List<RagdollBoneDef>()).Add(def);
+                known.Add(name);
+                nameToIndex[name] = i;
+                defByName[name] = def;
+                if (added.Count >= MaxModSoftTissueBones) break;
+            }
+
+            if (added == null) return defs;
+
+            var scopeLabel = allBones
+                ? excludeDigits ? "all bones except digits" : "all bones"
+                : "mod bones except digits";
+            var fittedCount = added.Count(d => d.HasMeshFit);
+            log.Info($"SoftTissue: discovered {added.Count} soft bone(s) ({scopeLabel}, " +
+                     $"mesh-fitted={fittedCount}, conservative-fallback={added.Count - fittedCount}): " +
+                     string.Join(", ", added.ConvertAll(d => d.Name)));
+
+            var merged = new RagdollBoneDef[defs.Length + added.Count];
+            defs.CopyTo(merged, 0);
+            added.CopyTo(merged, defs.Length);
+            return merged;
+        }
+
+        internal void SetDismemberedBones(IEnumerable<string> bones)
+        {
+            localDismemberBones.Clear();
+            foreach (var bone in bones)
+                if (!string.IsNullOrWhiteSpace(bone) && !localDismemberBones.Contains(bone))
+                    localDismemberBones.Add(bone);
+            useLocalDismemberBones = true;
+        }
+
+        internal RagdollBoneDef[] BuildActivePhysicsDefsForDismemberment(
+            IHostSkeleton skel,
+            RagdollBoneDef[] defs,
+            Dictionary<string, int> activeNameToIndex)
+        {
+            var severedBones = useLocalDismemberBones ? localDismemberBones : settings.DismemberPocBones;
+            if (severedBones == null || severedBones.Count == 0 || defs.Length == 0)
+                return defs;
+
+            var severedRoots = new List<int>();
+            foreach (var boneName in severedBones)
+            {
+                if (string.IsNullOrWhiteSpace(boneName)) continue;
+                var idx = ResolveBoneIndex(skel, boneName);
+                if (idx >= 0 && !severedRoots.Contains(idx))
+                    severedRoots.Add(idx);
+            }
+            if (severedRoots.Count == 0)
+                return defs;
+
+            var physicsRoots = new List<int>();
+            foreach (var def in defs)
+                if (def.ParentName == null && activeNameToIndex.TryGetValue(def.Name, out var idx))
+                    physicsRoots.Add(idx);
+
+            var removableRoots = new List<int>(severedRoots.Count);
+            foreach (var root in severedRoots)
+            {
+                var containsPhysicsRoot = false;
+                foreach (var physicsRoot in physicsRoots)
+                {
+                    if (IsDescendantOrSelf(skel, physicsRoot, root))
+                    {
+                        containsPhysicsRoot = true;
                         break;
                     }
-                if (!matched)
+                }
+
+                if (!containsPhysicsRoot)
+                    removableRoots.Add(root);
+            }
+
+            if (removableRoots.Count == 0)
+                return defs;
+
+            var kept = new List<RagdollBoneDef>(defs.Length);
+            var removedNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var def in defs)
+            {
+                if (!activeNameToIndex.TryGetValue(def.Name, out var idx))
                     continue;
+
+                var severed = false;
+                foreach (var root in removableRoots)
+                {
+                    if (IsDescendantOrSelf(skel, idx, root))
+                    {
+                        severed = true;
+                        break;
+                    }
+                }
+
+                if (severed)
+                    removedNames.Add(def.Name);
+                else
+                    kept.Add(def);
             }
 
-            if (!excludeDigits || !IsDigitBone(skeletonProfile, candidateName))
-                fitCandidates.Add(i);
+            if (removedNames.Count == 0)
+                return defs;
+            if (kept.Count < 2)
+            {
+                log.Warning($"Ragdoll: active dismember physics would leave {kept.Count} bodies; keeping full rig.");
+                return defs;
+            }
+
+            foreach (var name in removedNames)
+                activeNameToIndex.Remove(name);
+
+            log.Info($"Ragdoll: active dismember physics removed {removedNames.Count}/{defs.Length} bodies.");
+            return kept.ToArray();
         }
-
-        var meshFits = fitCandidates.Count == 0
-            ? new Dictionary<int, SoftTissueMeshFit>()
-            : meshes.SoftTissueFits(skel.Actor, skel, fitCandidates, settings.RagdollVerboseLog);
-
-        List<RagdollBoneDef>? added = null;
-        // Havok skeletons are topologically ordered (parent before child), so chains resolve
-        // in one forward pass: by the time a child is visited its discovered parent is known.
-        for (int i = 0; i < n && i < pc; i++)
-        {
-            var name = skel.BoneName(i);
-            if (name == null || known.Contains(name)) continue;
-
-            if (!allBones)
-            {
-                var matched = false;
-                foreach (var prefix in prefixes)
-                    if (name.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) { matched = true; break; }
-                if (!matched) continue;
-            }
-            if (excludeDigits && IsDigitBone(skeletonProfile, name))
-            {
-                continue;
-            }
-
-            // Nearest ancestor that is a rig def (original or discovered) — the joint anchor.
-            // A match with no rig ancestor is skipped: it would orphan into a free body.
-            string? anchorName = null;
-            int p = skel.Parent(i);
-            while (p >= 0 && p < n)
-            {
-                var pName = skel.BoneName(p);
-                if (pName != null && known.Contains(pName)) { anchorName = pName; break; }
-                p = p < pc ? skel.Parent(p) : -1;
-            }
-            if (anchorName == null || !nameToIndex.ContainsKey(anchorName))
-                continue;
-
-            // A missing mesh cluster is deliberately a tiny inertial proxy.  It is safer to
-            // under-represent a helper bone than to fabricate a large torso-sized collider from
-            // hierarchy distance.  With a usable cluster, dimensions and center come entirely
-            // from the weighted model vertices.
-            var hasMeshFit = meshFits.TryGetValue(i, out var meshFit);
-            var radius = hasMeshFit ? meshFit.Radius : SoftTissueFallbackRadius;
-            var halfLength = hasMeshFit ? meshFit.HalfLength : SoftTissueFallbackHalfLength;
-
-            var def = new RagdollBoneDef
-            {
-                Name = name,
-                ParentName = anchorName,
-                CapsuleRadius = radius,
-                CapsuleHalfLength = halfLength,
-                Mass = 0.1f,
-                SwingLimit = 0.35f,
-                Joint = JointType.Ball,
-                AnatomicalRole = SkeletonBoneRole.SoftBody,
-                ColliderShape = RagdollColliderShape.Capsule,
-                SoftBody = true,
-                SoftSpringFreq = 10f,
-                SoftSpringDamp = 1f,
-                SoftServoFreq = 3f,
-                SoftServoDamp = 0.2f,
-                HasMeshFit = hasMeshFit,
-                MeshFitCenterModelOffset = hasMeshFit ? meshFit.CenterModelOffset : Vector3.Zero,
-                MeshFitAxisModel = hasMeshFit ? meshFit.AxisModel : Vector3.UnitY,
-            };
-
-            (added ??= new List<RagdollBoneDef>()).Add(def);
-            known.Add(name);
-            nameToIndex[name] = i;
-            defByName[name] = def;
-            if (added.Count >= MaxModSoftTissueBones) break;
-        }
-
-        if (added == null) return defs;
-
-        var scopeLabel = allBones
-            ? excludeDigits ? "all bones except digits" : "all bones"
-            : "mod bones except digits";
-        var fittedCount = added.Count(d => d.HasMeshFit);
-        log.Info($"SoftTissue: discovered {added.Count} soft bone(s) ({scopeLabel}, " +
-                 $"mesh-fitted={fittedCount}, conservative-fallback={added.Count - fittedCount}): " +
-                 string.Join(", ", added.ConvertAll(d => d.Name)));
-
-        var merged = new RagdollBoneDef[defs.Length + added.Count];
-        defs.CopyTo(merged, 0);
-        added.CopyTo(merged, defs.Length);
-        return merged;
     }
 
     /// <summary>
@@ -364,98 +521,6 @@ public unsafe partial class Ragdoll
     // A bone's anatomical role is the profile's SkeletonBoneRole (stage A4 merged the identical AnatomicalRole into it).
     /// <summary>The collision volume of a ragdoll body (seen by extensions, <see cref="Bepu.RagdollExtensionBone"/>).</summary>
     internal enum RagdollColliderShape { Capsule, Box, ProfileHull, Mesh }
-
-    private void SetDismemberedBonesCore(IEnumerable<string> bones)
-    {
-        localDismemberBones.Clear();
-        foreach (var bone in bones)
-            if (!string.IsNullOrWhiteSpace(bone) && !localDismemberBones.Contains(bone))
-                localDismemberBones.Add(bone);
-        useLocalDismemberBones = true;
-    }
-
-    private RagdollBoneDef[] BuildActivePhysicsDefsForDismemberment(
-        IHostSkeleton skel,
-        RagdollBoneDef[] defs,
-        Dictionary<string, int> activeNameToIndex)
-    {
-        var severedBones = useLocalDismemberBones ? localDismemberBones : settings.DismemberPocBones;
-        if (severedBones == null || severedBones.Count == 0 || defs.Length == 0)
-            return defs;
-
-        var severedRoots = new List<int>();
-        foreach (var boneName in severedBones)
-        {
-            if (string.IsNullOrWhiteSpace(boneName)) continue;
-            var idx = ResolveBoneIndex(skel, boneName);
-            if (idx >= 0 && !severedRoots.Contains(idx))
-                severedRoots.Add(idx);
-        }
-        if (severedRoots.Count == 0)
-            return defs;
-
-        var physicsRoots = new List<int>();
-        foreach (var def in defs)
-            if (def.ParentName == null && activeNameToIndex.TryGetValue(def.Name, out var idx))
-                physicsRoots.Add(idx);
-
-        var removableRoots = new List<int>(severedRoots.Count);
-        foreach (var root in severedRoots)
-        {
-            var containsPhysicsRoot = false;
-            foreach (var physicsRoot in physicsRoots)
-            {
-                if (IsDescendantOrSelf(skel, physicsRoot, root))
-                {
-                    containsPhysicsRoot = true;
-                    break;
-                }
-            }
-
-            if (!containsPhysicsRoot)
-                removableRoots.Add(root);
-        }
-
-        if (removableRoots.Count == 0)
-            return defs;
-
-        var kept = new List<RagdollBoneDef>(defs.Length);
-        var removedNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var def in defs)
-        {
-            if (!activeNameToIndex.TryGetValue(def.Name, out var idx))
-                continue;
-
-            var severed = false;
-            foreach (var root in removableRoots)
-            {
-                if (IsDescendantOrSelf(skel, idx, root))
-                {
-                    severed = true;
-                    break;
-                }
-            }
-
-            if (severed)
-                removedNames.Add(def.Name);
-            else
-                kept.Add(def);
-        }
-
-        if (removedNames.Count == 0)
-            return defs;
-        if (kept.Count < 2)
-        {
-            log.Warning($"Ragdoll: active dismember physics would leave {kept.Count} bodies; keeping full rig.");
-            return defs;
-        }
-
-        foreach (var name in removedNames)
-            activeNameToIndex.Remove(name);
-
-        log.Info($"Ragdoll: active dismember physics removed {removedNames.Count}/{defs.Length} bodies.");
-        return kept.ToArray();
-    }
 
     // Ragdoll bone definition
     internal struct RagdollBoneDef

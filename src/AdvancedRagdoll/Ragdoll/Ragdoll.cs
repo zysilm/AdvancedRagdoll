@@ -149,19 +149,11 @@ public unsafe partial class Ragdoll : IDisposable
         public float GaitPhase;
     }
 
-    // Bone defs actually used for the active ragdoll, keyed by name. For humanoid
-    // skeletons these are the tuned human defs; for non-humanoid skeletons they are
-    // generated from the real skeleton topology (see BuildGenericSkeletonDefs).
-    // StepAndApply reads capsule extents from here instead of re-deriving the human set.
-    private readonly Dictionary<string, RagdollBoneDef> activeDefByName = new();
-
     // True while the active ragdoll was built by the generic (non-humanoid) path.
     // Generic rigs get extra stabilization (more solver iterations + velocity clamp)
     // because their auto-generated constraint network is stiffer/less conditioned
     // than the hand-tuned human profile.
     private bool activeRagdollIsGeneric { get => ctx.IsGeneric; set => ctx.IsGeneric = value; }
-    private bool useLocalDismemberBones;
-    private readonly List<string> localDismemberBones = new();
 
     // The skeleton profile (docs/ARCHITECTURE.md §3): which bone plays which part,
     // the bone table, ranges of motion, mass budget and the rest. The named bones (landmarks, bone
@@ -248,30 +240,19 @@ public unsafe partial class Ragdoll : IDisposable
     // Diagnostic frame counter
     private int frameCount;
 
-    // Reused per-frame buffers for StepAndApply (avoid per-frame GC pressure)
-    private BoneModificationResult? cachedResult;
-    private Vector3[]? cachedWorldPositions;
-    private Quaternion[]? cachedWorldRotations;
-    private bool[]? cachedBoneValid;
-
     // Render interpolation: physics advances in fixed 60Hz ticks but we render every frame
     // (often >60fps). Without interpolation the ragdoll shows the same pose for several
     // frames then jumps on each tick — visible micro-judder. We snapshot the bone world
     // pose just before each physics tick (prev) and after (cur, in cachedWorld*), then blend
     // by the leftover-accumulator fraction so the rendered pose advances smoothly every frame.
-    private Vector3[]? prevWorldPositions;
-    private Quaternion[]? prevWorldRotations;
     private bool hasPrevPhysicsState;
     // Animation freeze state
     private float savedOverallSpeed = 1.0f;
-    private readonly HashSet<int> ragdollBoneIndices = new();
 
     // Weapon drop physics is WeaponDrop.WeaponDropSimulation (a separate simulation; the plugin's WeaponDropController).
 
     // Ancestor bone index — the belly-follow bone must follow the pelvis to prevent mesh tearing
     private int nHaraIndex = -1;
-    // Head bone index (the profile's head) — used for hair physics and partial skeleton propagation
-    private int kaoBodyBoneIndex = -1;
 
     private readonly struct FaceTraversalLandmark
     {
@@ -358,6 +339,9 @@ public unsafe partial class Ragdoll : IDisposable
         corpseTraversal = new CorpseTraversal(ctx);
         // a6-7
         joints = new JointModel(ctx);
+        // a6-8
+        skeletonReader = new SkeletonReader(ctx);
+        poseWriter = new PoseWriter(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
