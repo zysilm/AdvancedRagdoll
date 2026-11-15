@@ -285,3 +285,15 @@ host or another component's state: the skeleton read and the bone definitions, t
 volumes and hull fits (recorded), the mesh status text, the surface cache, the torso bodies, the bone index set, the
 animation freeze, the colliders of the other characters, the hair rig and the start and end records. The handoff
 sample is activation state; the ragdoll hands it in. `CoreCalls` is unchanged.
+<!-- a6-12 -->
+Since A6-12 the replay's carried-state restore (`Ragdoll.Replay.cs`) and the activation's resets and teardown
+(`Ragdoll.Activation.cs`) no longer write other components' fields through forwarding properties. Each component whose
+fields the replay restores has its own `RestoreCarried` (the collapse, the knee power-loss, the skeleton reader, the
+character colliders, the impacts, the grab, the external bodies, the weapon strike, the corpse traversal, the mesh
+volumes; the hair rig already had `RestoreLiveHairState`), and the ragdoll calls them in the order of the old writes.
+Activation, deactivation and the simulation teardown call small reset and teardown methods on the components
+(`ResetForActivation`, `Disarm*`, `Clear*`, `Teardown`, `BumpGeneration`, `ResetLodInstall`), split where the old code
+interleaved one component's writes with another's or with a recorded call (stopping a collapse pattern, then dropping
+what was armed), so every write keeps its place. The activation flow, the recorded calls, the host reads and the
+context fields stay on the ragdoll. Known gap kept as it was: the teardown does not clear the external bodies' carried
+rigs. `CoreCalls` is unchanged.

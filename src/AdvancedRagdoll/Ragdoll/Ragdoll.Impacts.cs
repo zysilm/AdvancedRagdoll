@@ -223,5 +223,19 @@ public unsafe partial class Ragdoll
             RandomState ^= RandomState << 5;
             return (RandomState & 0xFFFFFF) / (float)0x1000000;
         }
+
+        // a6-12
+        /// <summary>The replay puts back the jitter random state earlier activations left.</summary>
+        internal void RestoreCarried(uint randomState) => RandomState = randomState;
+
+        /// <summary>Simulation teardown: the timers, the last descent speed and the torso bodies (the random state
+        /// carries over).</summary>
+        internal void Teardown()
+        {
+            FreezeRemaining = 0f;
+            CooldownRemaining = 0f;
+            PreviousDescentSpeed = 0f;
+            TorsoBodyIndices.Clear();
+        }
     }
 }

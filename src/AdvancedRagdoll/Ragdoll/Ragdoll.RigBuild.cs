@@ -1761,5 +1761,9 @@ public unsafe partial class Ragdoll
             inertia.InverseInertiaTensor.ZY *= transverse;
             return inertia;
         }
+
+        // a6-12
+        /// <summary>Simulation teardown: the set of soft-tissue bodies.</summary>
+        internal void Teardown() => softBodyBodyHandles.Clear();
     }
 }

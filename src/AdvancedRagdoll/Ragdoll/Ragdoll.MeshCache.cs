@@ -155,6 +155,28 @@ public unsafe partial class Ragdoll
             frozenMeshCache?.Dispose(); frozenMeshCache = null;
             ClearWeaponContactMeshes();
         }
+
+        // a6-12
+        /// <summary>The replay puts back the body surfaces carried over from earlier activations (format version 3).
+        /// Nothing replaced is disposed.</summary>
+        internal void RestoreCarried(ReplayCarriedState s)
+        {
+            frozenMeshActor = s.FrozenMeshActor;
+            frozenMeshEntity = s.FrozenMeshEntity;
+            observedMeshEnabled = s.ObservedMeshEnabled;
+            observedMeshCacheRevision = s.ObservedMeshCacheRevision;
+            cachedMeshLodEnabled = s.CachedMeshLodEnabled;
+            cachedMeshLodTolerance = s.CachedMeshLodTolerance;
+            nextMeshCacheAttempt = s.NextMeshCacheAttempt;
+            frozenMeshCache = s.FrozenMeshCache;
+            weaponContactMeshes.Clear();
+            weaponContactMeshOrder.Clear();
+            foreach (var entry in s.WeaponContactMeshes)
+            {
+                weaponContactMeshes[entry.Actor] = (entry.Entity, entry.Draw, entry.Cache);
+                weaponContactMeshOrder.Add(entry.Actor);
+            }
+        }
     }
 
     /// <summary>The rendered body of a character, partitioned into the rig's regions and frozen bone-local. The

@@ -82,9 +82,9 @@ public unsafe partial class Ragdoll
         isActive = true;
         lastFrameTimestamp = 0;
         physicsAccumulator = 0f;
-        traversalMassMultiplier = 1f;
+        corpseTraversal.ResetForActivation();
         prevAllAsleep = false;
-        npcColliderMovedNearCorpse = false;
+        characterColliders.ResetForActivation();
         biomechanicalSettleRemaining = 0f;
         hasPrevPhysicsState = false;
         // Save original position so we can restore if FollowPosition is toggled off
@@ -154,25 +154,24 @@ public unsafe partial class Ragdoll
         }
 
         StopDirectedCollapseSpike();
-        pendingDirectedCollapseSpike = false;
+        collapse.DisarmDirected();
         StopCollapseEntryConditioning();
-        pendingEntryConditionedKneePowerLoss = false;
+        collapse.DisarmEntryConditioning();
         StopKneePowerLossPattern();
-        pendingKneePowerLossPattern = false;
+        knee.Disarm();
 
         targetCharacterAddress = nint.Zero;
         targetEntityId = 0;
         physicsStarted = false;
         animationFrozen = false;
         handoffSampleValid = false;
-        ragdollBoneIndices.Clear();
-        activeDefByName.Clear();
+        poseWriter.ClearBoneIndices();
+        skeletonReader.ClearActiveDefs();
         activeRagdollIsGeneric = false;
-        useLocalDismemberBones = false;
-        localDismemberBones.Clear();
-        terrainPatchCenters.Clear();
+        skeletonReader.ClearSeveredSelection();
+        ground.ClearPatchCenters();
         nHaraIndex = -1;
-        kaoBodyBoneIndex = -1;
+        poseWriter.ResetHeadBoneIndex();
         hairRig.Remove();
 
         DestroySimulation();
@@ -318,49 +317,27 @@ public unsafe partial class Ragdoll
 
     private void DestroySimulation()
     {
-        lastMeshLodInstall = 0;
-        externalBodyGeneration++;
-        impactFreezeRemaining = 0f;
-        impactCooldownRemaining = 0f;
-        previousDescentSpeed = 0f;
-        torsoBodyIndices.Clear();
-        grabSlots.Clear();
-        suspendedNpcAddress = nint.Zero;
-        standingActive = false;
-        standingConstraints.Clear();
-        wristConstraints.Clear();
-        angularMotorByBone.Clear();
-        swingLimitByBone.Clear();
-        recoilRelaxers.Clear();
+        // Each component forgets its part of the rig, in the order the writes always had. Known gap (kept as it was):
+        // the external bodies' carried rigs are not cleared here.
+        meshVolumes.ResetLodInstall();
+        external.BumpGeneration();
+        impacts.Teardown();
+        grab.Teardown();
+        standing.Teardown();
+        joints.Teardown();
         biomechanicalSettleRemaining = 0f;
         ragdollBones.Clear();
-        characterSurfaceRuntime = null;
-        faceTraversalLandmarks.Clear();
-        externalBodies.Clear();
-        externalRigs.Clear();
-        externalDynamicBodyHandles.Clear();
-        externalRigDynamicBodyHandles.Clear();
-        externalRigNoRagdollContactBodyHandles.Clear();
-        externalRigConnectedPairs.Clear();
+        surfaceRuntime.Teardown();
+        corpseTraversal.ClearFaceLandmarks();
+        external.Teardown();
         softKinematicBodyHandles.Clear();
-        npcCollisionKinematicBodyHandles.Clear();
-        npcTraversalGhostKinematicBodyHandles.Clear();
-        npcTraversalDynamicBodyHandles.Clear();
-        lock (npcTraversalProxySync)
-        {
-            npcTraversalProxyRequests.Clear();
-            npcTraversalProxies.Clear();
-        }
-        npcTraversalProxyActivityThisFrame = false;
-        softBodyBodyHandles.Clear();
+        characterColliders.ClearKinematicBodySets();
+        corpseTraversal.ClearProxies();
+        rigBuilder.Teardown();
         weaponContact.ClearState();
-        npcCollisionStates.Clear();
-        npcTraversalAnchors.Clear();
-        attackStrikeTimer = 0f;
-        strikePower = 0f;
-        strikeColliderAddress = nint.Zero;
-        strikeColliderAddresses.Clear();
-        weaponPrevValid = false;
+        characterColliders.ClearStates();
+        corpseTraversal.ClearAnchors();
+        strike.Teardown();
         simulation?.Dispose();
         simulation = null;
         meshVolumes.ReleaseMeshDispatcher();

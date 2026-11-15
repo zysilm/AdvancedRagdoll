@@ -62,61 +62,22 @@ public unsafe partial class Ragdoll
 
     internal void RestoreCarriedState(ReplayCarriedState s)
     {
-        pendingDirectedCollapseSpike = s.PendingDirectedCollapse;
-        pendingDirectedProfileId = s.PendingProfile;
-        pendingDirectedDuration = s.PendingDuration;
-        pendingDirectedFootForce = s.PendingFootForce;
-        pendingDirectedPelvisForce = s.PendingPelvisForce;
-        pendingDirectedDrop = s.PendingDrop;
-        pendingDirectedForward = s.PendingForward;
-        pendingDirectedPitchDegrees = s.PendingPitchDegrees;
-        pendingEntryConditionedKneePowerLoss = s.PendingEntryConditionedKneePowerLoss;
-        pendingKneePowerLossPattern = s.PendingKneePowerLoss;
-        useLocalDismemberBones = s.UseLocalSeveredBones;
-        localDismemberBones.Clear();
-        localDismemberBones.AddRange(s.LocalSeveredBones);
-        lightweightNpcCollisionAddresses.Clear();
-        foreach (var address in s.LightweightColliders) lightweightNpcCollisionAddresses.Add(address);
-        impactRandomState = s.ImpactRandomState;
-        nextGrabSlotId = s.NextGrabSlotId;
-        externalBodyGeneration = s.ExternalBodyGeneration;
-        struckThisWindow.Clear();
-        foreach (var handle in s.StruckThisWindow) struckThisWindow.Add(handle);
-        strikeColliderAddresses.Clear();
-        foreach (var address in s.StrikeColliders) strikeColliderAddresses.Add(address);
-        lock (npcTraversalProxySync)
-        {
-            npcTraversalProxyRequests.Clear();
-            foreach (var r in s.TraversalRequests)
-                npcTraversalProxyRequests[r.Actor] = new NpcTraversalProxyRequest
-                {
-                    Enabled = r.Enabled, InitialRoot = r.InitialRoot, TargetRoot = r.TargetRoot, FloorY = r.FloorY,
-                    VisualScale = r.VisualScale, MoveSpeed = r.MoveSpeed, MaxClimb = r.MaxClimb,
-                    StompResponse = r.StompResponse, ConcurrentStompers = r.ConcurrentStompers, Locomoting = r.Locomoting,
-                };
-        }
+        // Each component puts back its own fields, in the order the writes always had.
+        collapse.RestoreCarried(s);
+        knee.RestoreCarried(s.PendingKneePowerLoss);
+        skeletonReader.RestoreCarried(s.UseLocalSeveredBones, s.LocalSeveredBones);
+        characterColliders.RestoreCarried(s.LightweightColliders);
+        impacts.RestoreCarried(s.ImpactRandomState);
+        grab.RestoreCarried(s.NextGrabSlotId);
+        external.RestoreCarried(s.ExternalBodyGeneration);
+        strike.RestoreCarried(s.StruckThisWindow, s.StrikeColliders);
+        corpseTraversal.RestoreCarried(s.TraversalRequests);
         followWasActive = s.FollowWasActive;
         // Only what decides whether the first live hair frame rebuilds the rig (and so reads the hair model); the
         // solver state of the game's live rig is not recorded, and its poses before the ragdoll are not outputs.
         hairRig.RestoreLiveHairState(s.LiveHairRunning, s.LiveHairDraw, s.LiveHairObject);
         if (s.HasBodySurfaces)
-        {
-            frozenMeshActor = s.FrozenMeshActor;
-            frozenMeshEntity = s.FrozenMeshEntity;
-            observedMeshEnabled = s.ObservedMeshEnabled;
-            observedMeshCacheRevision = s.ObservedMeshCacheRevision;
-            cachedMeshLodEnabled = s.CachedMeshLodEnabled;
-            cachedMeshLodTolerance = s.CachedMeshLodTolerance;
-            nextMeshCacheAttempt = s.NextMeshCacheAttempt;
-            frozenMeshCache = s.FrozenMeshCache;
-            weaponContactMeshes.Clear();
-            weaponContactMeshOrder.Clear();
-            foreach (var entry in s.WeaponContactMeshes)
-            {
-                weaponContactMeshes[entry.Actor] = (entry.Entity, entry.Draw, entry.Cache);
-                weaponContactMeshOrder.Add(entry.Actor);
-            }
-        }
+            meshVolumes.RestoreCarried(s);
     }
 
     /// <summary>One render frame, as the render hook runs it.</summary>

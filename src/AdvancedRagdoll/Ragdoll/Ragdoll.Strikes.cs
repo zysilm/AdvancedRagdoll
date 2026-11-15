@@ -257,6 +257,28 @@ public unsafe partial class Ragdoll
             StruckThisWindow.Clear();
             WeaponPrevValid = false;
         }
+
+        // a6-12
+        /// <summary>The replay puts back the bodies struck this swing and the striking colliders earlier activations
+        /// left.</summary>
+        internal void RestoreCarried(List<int> struckThisWindow, List<nint> strikeColliders)
+        {
+            StruckThisWindow.Clear();
+            foreach (var handle in struckThisWindow) StruckThisWindow.Add(handle);
+            ColliderAddresses.Clear();
+            foreach (var address in strikeColliders) ColliderAddresses.Add(address);
+        }
+
+        /// <summary>Simulation teardown: the strike window ends (the bodies struck this swing are not cleared, as
+        /// before).</summary>
+        internal void Teardown()
+        {
+            AttackStrikeTimer = 0f;
+            StrikePower = 0f;
+            ColliderAddress = nint.Zero;
+            ColliderAddresses.Clear();
+            WeaponPrevValid = false;
+        }
     }
 
     /// <summary>Distance from <paramref name="from"/> to the nearest ragdoll body, or null if none.</summary>

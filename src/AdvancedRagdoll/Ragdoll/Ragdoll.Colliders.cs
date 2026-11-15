@@ -1061,5 +1061,26 @@ public unsafe partial class Ragdoll
                         SetHandle(bone.Handle);
             }
         }
+
+        // a6-12
+        /// <summary>The replay puts back the lightweight set earlier activations left.</summary>
+        internal void RestoreCarried(List<nint> lightweightColliders)
+        {
+            lightweightNpcCollisionAddresses.Clear();
+            foreach (var address in lightweightColliders) lightweightNpcCollisionAddresses.Add(address);
+        }
+
+        /// <summary>Activation: no collider has moved near the corpse yet.</summary>
+        internal void ResetForActivation() => npcColliderMovedNearCorpse = false;
+
+        /// <summary>Simulation teardown: the two kinematic body sets the narrow phase reads.</summary>
+        internal void ClearKinematicBodySets()
+        {
+            npcCollisionKinematicBodyHandles.Clear();
+            npcTraversalGhostKinematicBodyHandles.Clear();
+        }
+
+        /// <summary>Simulation teardown: the colliders of the other characters.</summary>
+        internal void ClearStates() => npcCollisionStates.Clear();
     }
 }

@@ -935,5 +935,26 @@ public unsafe partial class Ragdoll
             body.Velocity.Linear += n * delta;
             body.Awake = true;
         }
+
+        // a6-12
+        /// <summary>The replay puts back what earlier activations armed for the next death.</summary>
+        internal void RestoreCarried(ReplayCarriedState s)
+        {
+            pendingDirectedCollapseSpike = s.PendingDirectedCollapse;
+            pendingDirectedProfileId = s.PendingProfile;
+            pendingDirectedDuration = s.PendingDuration;
+            pendingDirectedFootForce = s.PendingFootForce;
+            pendingDirectedPelvisForce = s.PendingPelvisForce;
+            pendingDirectedDrop = s.PendingDrop;
+            pendingDirectedForward = s.PendingForward;
+            pendingDirectedPitchDegrees = s.PendingPitchDegrees;
+            pendingEntryConditionedKneePowerLoss = s.PendingEntryConditionedKneePowerLoss;
+        }
+
+        /// <summary>Deactivation drops the directed collapse armed for the next death (after stopping a running one).</summary>
+        internal void DisarmDirected() => pendingDirectedCollapseSpike = false;
+
+        /// <summary>Deactivation drops the entry conditioning armed for the next death (after stopping a running one).</summary>
+        internal void DisarmEntryConditioning() => pendingEntryConditionedKneePowerLoss = false;
     }
 }

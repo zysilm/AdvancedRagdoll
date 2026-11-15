@@ -167,5 +167,9 @@ public unsafe partial class Ragdoll
                     rb.Name, body.Pose.Position, body.Pose.Orientation);
             }
         }
+
+        // a6-12
+        /// <summary>Simulation teardown: the query copy goes.</summary>
+        internal void Teardown() => Runtime = null;
     }
 }

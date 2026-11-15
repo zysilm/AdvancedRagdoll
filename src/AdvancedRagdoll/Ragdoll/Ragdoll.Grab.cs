@@ -484,5 +484,16 @@ public unsafe partial class Ragdoll
 
             ctx.Log.Info("Ragdoll: Grab constraint removed");
         }
+
+        // a6-12
+        /// <summary>The replay puts back the next slot id earlier activations left.</summary>
+        internal void RestoreCarried(int nextSlotId) => NextSlotId = nextSlotId;
+
+        /// <summary>Simulation teardown: the slots and the parked grabber (the next slot id carries over).</summary>
+        internal void Teardown()
+        {
+            grabSlots.Clear();
+            SuspendedNpcAddress = nint.Zero;
+        }
     }
 }
