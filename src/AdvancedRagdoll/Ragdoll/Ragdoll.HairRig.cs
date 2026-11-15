@@ -268,7 +268,7 @@ public unsafe partial class Ragdoll
             if (!hairRigActive) return;
             if (!skel.HasRoot) return;
             float alpha = animatedHair ? Math.Clamp(animatedHairAccumulator / FixedTimestep, 0, 1) :
-                ctx.Core.PhysicsInterpolation;
+                ctx.PhysicsInterpolation;
             foreach (var c in hairRigChains)
             {
                 if (c.PartialSkeletonIndex >= skel.PartCount) continue;

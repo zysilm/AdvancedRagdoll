@@ -100,8 +100,6 @@ public unsafe partial class Ragdoll : IDisposable
     // frame at whatever framerate the game runs (30/60/120/144…). Stepping a fixed
     // 1/60 every call made the ragdoll run in slow-motion below 60fps and fast above it.
     // We measure real wall-clock dt and advance the simulation in fixed-size substeps.
-    private long lastFrameTimestamp;
-    private float physicsAccumulator;
     private const int MaxSubstepsPerFrame = 4;  // cap catch-up to avoid a spiral of death
     private const float SlowFrameSeconds = 1f / 30f; // slower than this, one substep a frame
     private const float MaxFrameDelta = 0.1f;   // ignore huge gaps (loading screens, hitches)
@@ -110,9 +108,9 @@ public unsafe partial class Ragdoll : IDisposable
 
     // Skeleton world transform (captured at activation from Skeleton.Transform)
     // ModelPose is in skeleton-local space; these convert to/from world space.
-    private Vector3 skelWorldPos { get => ctx.RootPosition; set => ctx.RootPosition = value; }
-    private Quaternion skelWorldRot { get => ctx.RootRotation; set => ctx.RootRotation = value; }
-    private Quaternion skelWorldRotInv { get => ctx.RootRotationInverse; set => ctx.RootRotationInverse = value; }
+    private ref Vector3 skelWorldPos => ref ctx.RootPosition;
+    private ref Quaternion skelWorldRot => ref ctx.RootRotation;
+    private ref Quaternion skelWorldRotInv => ref ctx.RootRotationInverse;
     private Vector3 skelWorldScale { get => ctx.RootScale; set => ctx.RootScale = value; }
 
     // Bone-to-body mapping
@@ -186,6 +184,15 @@ public unsafe partial class Ragdoll : IDisposable
     // a6-7
     // EntityId captured at Activate (SimulationContext.TargetEntityId).
     private uint targetEntityId { get => ctx.TargetEntityId; set => ctx.TargetEntityId = value; }
+    // a6-11
+    // The fixed-step accumulator and the render interpolation flag (SimulationContext; the stepping loop's rules are
+    // the Stepper's). Render interpolation: physics advances in fixed 60Hz ticks but we render every frame
+    // (often >60fps). Without interpolation the ragdoll shows the same pose for several
+    // frames then jumps on each tick — visible micro-judder. We snapshot the bone world
+    // pose just before each physics tick (prev) and after (cur, in cachedWorld*), then blend
+    // by the leftover-accumulator fraction so the rendered pose advances smoothly every frame.
+    private ref float physicsAccumulator => ref ctx.PhysicsAccumulator;
+    private ref bool hasPrevPhysicsState => ref ctx.HasPrevPhysicsState;
 
     /// <summary>Registers the host's default humanoid profile and builds its bone tables (<see cref="AllBoneDefaults"/>,
     /// <see cref="DefaultBoneDefs"/>). Once per process (the same profile again is accepted), before the tables are
@@ -234,15 +241,7 @@ public unsafe partial class Ragdoll : IDisposable
     // Water under the corpse (Ragdoll.Water.cs).
     private readonly Water water;
 
-    // Diagnostic frame counter
-    private int frameCount;
 
-    // Render interpolation: physics advances in fixed 60Hz ticks but we render every frame
-    // (often >60fps). Without interpolation the ragdoll shows the same pose for several
-    // frames then jumps on each tick — visible micro-judder. We snapshot the bone world
-    // pose just before each physics tick (prev) and after (cur, in cachedWorld*), then blend
-    // by the leftover-accumulator fraction so the rendered pose advances smoothly every frame.
-    private bool hasPrevPhysicsState;
     // Animation freeze state
     private float savedOverallSpeed = 1.0f;
 
@@ -343,6 +342,8 @@ public unsafe partial class Ragdoll : IDisposable
         ctx.Recorder = recorder = new Recorder(ctx);
         // a6-10
         rigBuilder = new RigBuilder(ctx, meshVolumes, structuralFit, joints, softTissue);
+        // a6-11
+        stepper = new Stepper(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
