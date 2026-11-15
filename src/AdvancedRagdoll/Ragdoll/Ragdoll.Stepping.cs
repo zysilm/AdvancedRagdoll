@@ -157,20 +157,7 @@ public unsafe partial class Ragdoll
         return body.Pose.Position.Y - MathF.Abs(capsuleY.Y) * bone.CapsuleHalfLength - bone.CapsuleRadius;
     }
 
-    private void WakeRagdollBodiesForBiomechanicalSettle()
-    {
-        if (simulation == null) return;
-
-        for (int i = 0; i < ragdollBones.Count; i++)
-        {
-            try
-            {
-                var bodyRef = simulation.Bodies.GetBodyReference(ragdollBones[i].BodyHandle);
-                bodyRef.Awake = true;
-            }
-            catch { }
-        }
-    }
+    private void WakeRagdollBodiesForBiomechanicalSettle() => ctx.WakeBodies();
 
     // === Heavy body: fall gravity ===
     //

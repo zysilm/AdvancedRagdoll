@@ -80,8 +80,8 @@ public unsafe partial class Ragdoll
             nint address;
             if (settings.RagdollMeshVolumes)
             {
-                if (ctx.Core.IsActive && !ctx.Core.TargetObjectAlive()) return;
-                address = ctx.Core.IsActive ? ctx.TargetCharacterAddress : ctx.Core.RunAnimatedHair ? localPlayer : 0;
+                if (ctx.IsActive && !ctx.Core.TargetObjectAlive()) return;
+                address = ctx.IsActive ? ctx.TargetCharacterAddress : ctx.Core.RunAnimatedHair ? localPlayer : 0;
             }
             else address = localPlayer; // Weapon-only: other actors are captured on demand by GetWeaponContactMesh.
             if (address == 0) return;

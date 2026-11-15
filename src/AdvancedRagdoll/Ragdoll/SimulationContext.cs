@@ -114,6 +114,55 @@ public unsafe partial class Ragdoll
                 if (rb.Name == boneName) return rb.BodyHandle;
             return null;
         }
+
+        // a6-4
+        // True once BEPU has put the complete ragdoll constraint island to sleep. The engine owns
+        // the decision; no independent ground test or forced velocity zeroing is layered on top.
+        internal bool PrevAllAsleep;
+
+        /// <summary>Wakes every body of the rig (the biomechanical settle keeps them awake).</summary>
+        internal void WakeBodies()
+        {
+            if (Simulation == null) return;
+
+            for (int i = 0; i < Bodies.Count; i++)
+            {
+                try
+                {
+                    var bodyRef = Simulation.Bodies.GetBodyReference(Bodies[i].BodyHandle);
+                    bodyRef.Awake = true;
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>The character's facing (the profile's forward axis), flattened onto the ground plane.</summary>
+        internal Vector3 ResolveForwardDirection()
+            => FlatNormalize(Vector3.Transform(Profile.Forward, RootRotation), Profile.Forward);
+
+        /// <summary>A bone's origin from its body's pose; false when the bone has no body.</summary>
+        internal bool TryGetBoneOriginPosition(string boneName, out Vector3 position)
+        {
+            position = Vector3.Zero;
+            if (Simulation == null) return false;
+            RagdollBone? bone = null;
+            foreach (var rb in Bodies)
+            {
+                if (rb.Name == boneName)
+                {
+                    bone = rb;
+                    break;
+                }
+            }
+            if (!bone.HasValue) return false;
+
+            var body = Simulation.Bodies.GetBodyReference(bone.Value.BodyHandle);
+            var yAxis = Vector3.Transform(Vector3.UnitY, body.Pose.Orientation);
+            var profileOrigin = body.Pose.Position -
+                                Vector3.Transform(bone.Value.ShapeCenterOffset, body.Pose.Orientation);
+            position = profileOrigin - yAxis * bone.Value.SegmentHalfLength;
+            return true;
+        }
     }
 
     /// <summary>
@@ -146,7 +195,6 @@ public unsafe partial class Ragdoll
         /// <summary>The recorded outcome of the structural fit (1 none, 2 not ready, 3 fitted, 4 failed).</summary>
         internal void RecFitOutcome(int outcome) => owner.recFitOutcome = outcome;
         internal FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address) => owner.CaptureFrozenMeshCache(address);
-        internal bool IsActive => owner.isActive;
         internal bool TargetObjectAlive() => owner.TargetObjectAlive();
         internal bool RunAnimatedHair => owner.RunAnimatedHair;
         // a6-3

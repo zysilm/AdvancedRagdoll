@@ -178,3 +178,17 @@ recorded API call, the ragdoll's own method does that step and passes the value 
 standing support holds the rig, or the attachment a grab resolved), so the components do not reference each other.
 The ragdoll's direct pokes (impulse, angular kick, punt, shake), the joint release after a recoil or a landing (joint
 state), the carrying of external rigs and the grab-attachment queries stay with the ragdoll for now.
+
+<!-- a6-4 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `KneePowerLoss` | `Ragdoll.KneePowerLoss.cs` | the knee power-loss pattern: whether it is armed or running, its phase and clocks, its six servos, the start poses, foot proxies and knee flex targets |
+| `GuidedCollapse` | `Ragdoll.GuidedCollapse.cs` | the directed collapse (kneel-pitch drive or a collapse profile's phases: what is armed for the next death, the five servos, targets, clocks) and the collapse entry conditioning (armed or running, the measured stance and knee angles, the continuation) |
+
+Since A6-4 the context also holds whether the rig rests asleep (the stepping loop decides it), waking every body, the
+character's flattened facing and a bone's origin from its body. The two collapse components call recorded API methods
+(stopping the patterns, beginning the knee power-loss) at fixed points of their work, so the ragdoll's own method makes
+those calls between the component's steps: beginning is split into a check (rig ready, bodies found) and the start,
+and a step that stops the pattern returns that to the ragdoll, which walks a collapse profile's controllers itself so a
+controller that releases the rig stops it at the same point. The entry conditioning's continuation is the ragdoll's
+recorded begin, handed in. The collapse profile book and the knee power-loss tuning stay with the ragdoll.

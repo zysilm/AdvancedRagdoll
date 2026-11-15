@@ -113,9 +113,6 @@ public unsafe partial class Ragdoll : IDisposable
     private const float MaxFrameDelta = 0.1f;   // ignore huge gaps (loading screens, hitches)
     private const float BiomechanicalSettleDuration = 1.25f;
     private const float RagdollSleepThreshold = 0.03f;
-    // True once BEPU has put the complete ragdoll constraint island to sleep. The engine owns
-    // the decision; no independent ground test or forced velocity zeroing is layered on top.
-    private bool prevAllAsleep;
     // Short post-wake window that keeps the island awake long enough for passive constraints and
     // contacts to resolve after grab/release or an external collision.
     private float biomechanicalSettleRemaining;
@@ -226,6 +223,9 @@ public unsafe partial class Ragdoll : IDisposable
     private bool isActive { get => ctx.IsActive; set => ctx.IsActive = value; }
     /// <summary>What the rig actually weighs, summed at InitializePhysics.</summary>
     private float ragdollTotalMass { get => ctx.TotalMass; set => ctx.TotalMass = value; }
+    // a6-4
+    // True once BEPU has put the complete ragdoll constraint island to sleep (SimulationContext.PrevAllAsleep).
+    private bool prevAllAsleep { get => ctx.PrevAllAsleep; set => ctx.PrevAllAsleep = value; }
 
     /// <summary>Registers the host's default humanoid profile and builds its bone tables (<see cref="AllBoneDefaults"/>,
     /// <see cref="DefaultBoneDefs"/>). Once per process (the same profile again is accepted), before the tables are
@@ -397,6 +397,9 @@ public unsafe partial class Ragdoll : IDisposable
         grab = new Grab(ctx);
         impacts = new Impacts(ctx);
         strike = new WeaponStrike(ctx);
+        // a6-4
+        knee = new KneePowerLoss(ctx);
+        collapse = new GuidedCollapse(ctx, random);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
@@ -415,41 +418,8 @@ public unsafe partial class Ragdoll : IDisposable
 
     private readonly List<ExternalRigHandle> carriedRigs = new();
 
-    // --- Directed collapse spike (experimental proof-of-concept) ---
-    // Goal: validate "foot plant + staged body drive" for a forward kneel/pitch death.
-    // This is intentionally separate from the validated relaxation-family Death Collapse.
-    private ConstraintHandle? directedLeftFootConstraint;
-    private ConstraintHandle? directedRightFootConstraint;
-    private ConstraintHandle? directedPelvisLinearConstraint;
-    private ConstraintHandle? directedPelvisAngularConstraint;
-    private ConstraintHandle? directedChestAngularConstraint;
-    private bool directedCollapseActive;
-    private bool pendingDirectedCollapseSpike;
-    private CollapseProfile? directedProfile;
-    private int directedPhaseIndex;
-    private float directedPhaseElapsed;
-    private string pendingDirectedProfileId = string.Empty;
-    private float directedElapsed;
-    private float directedDuration;
-    private float directedFootForce;
-    private float directedPelvisForce;
-    private float directedDrop;
-    private float directedForwardDistance;
-    private float directedPitchRadians;
-    private float pendingDirectedDuration;
-    private float pendingDirectedFootForce;
-    private float pendingDirectedPelvisForce;
-    private float pendingDirectedDrop;
-    private float pendingDirectedForward;
-    private float pendingDirectedPitchDegrees;
+    // The guided-collapse profiles this ragdoll may play (the directed collapse, Ragdoll.GuidedCollapse.cs).
     private readonly ICollapseProfileSource collapseProfileBook;
-    private Vector3 directedForward;
-    private Vector3 directedRight;
-    private Vector3 directedLeftFootTarget;
-    private Vector3 directedRightFootTarget;
-    private Vector3 directedPelvisStart;
-    private Quaternion directedPelvisStartRot;
-    private Quaternion directedChestStartRot;
 
     // Knee power-loss tuning is fixed at the settings class defaults (no longer exposed in the UI).
     private static readonly GuidedCollapseKneePowerLossSettings KneePowerLossDefaults = new();
