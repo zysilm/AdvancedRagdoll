@@ -202,6 +202,51 @@ public unsafe partial class Ragdoll
                 Log.Warning(ex, $"Ragdoll: failed to enumerate constraints on body {body.Value}");
             }
         }
+
+        // a6-6
+        // True once physics has taken the body over from the death animation.
+        internal bool PhysicsStarted;
+        // Short post-wake window that keeps the island awake long enough for passive constraints and
+        // contacts to resolve after grab/release or an external collision.
+        internal float BiomechanicalSettleRemaining;
+
+        /// <summary>The rig is no longer resting: keep it stepping for at least <paramref name="duration"/> seconds
+        /// (the stepping loop counts the window down).</summary>
+        internal void BeginBiomechanicalSettle(float duration = BiomechanicalSettleDuration)
+        {
+            BiomechanicalSettleRemaining = System.MathF.Max(BiomechanicalSettleRemaining, duration);
+            PrevAllAsleep = false;
+        }
+
+        /// <summary>
+        /// Read the scale that is actually applied to the rendered character. The NPC Scale effect
+        /// writes the render scale directly, while ordinary actors normally expose the same
+        /// value through Skeleton.Transform.Scale. Prefer the draw object so collision follows live
+        /// live scale changes, and retain the skeleton value as a safe fallback.
+        /// </summary>
+        internal Vector3 GetCharacterScale(nint address, IHostSkeleton ns)
+        {
+            if (TryGetVisualScale(address, out var drawScale))
+                return drawScale;
+
+            return GetSkeletonScale(ns);
+        }
+
+        internal bool TryGetVisualScale(nint address, out Vector3 scale)
+        {
+            scale = Vector3.One;
+            if (address != nint.Zero)
+            {
+                if (Actors.TryGetDrawScale(address, out scale))
+                {
+                    if (IsFinite(scale) && System.MathF.Abs(scale.X) >= 1e-6f && System.MathF.Abs(scale.Y) >= 1e-6f && System.MathF.Abs(scale.Z) >= 1e-6f)
+                        return true;
+                }
+            }
+
+            scale = Vector3.One;
+            return false;
+        }
     }
 
     /// <summary>
@@ -222,7 +267,6 @@ public unsafe partial class Ragdoll
 
         internal FrozenMeshGeometryCache? GetWeaponContactMesh(nint address) => owner.GetWeaponContactMesh(address);
         internal FrozenMeshGeometryCache? CachedSurfaceFor(nint address) => owner.CachedSurfaceFor(address);
-        internal Vector3 GetCharacterScale(nint address, IHostSkeleton skel) => owner.GetCharacterScale(address, skel);
 
         /// <summary>How far the render frame is between the last two physics steps (1 before the first step).</summary>
         internal float PhysicsInterpolation =>
@@ -235,8 +279,5 @@ public unsafe partial class Ragdoll
         internal FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address) => owner.CaptureFrozenMeshCache(address);
         internal bool TargetObjectAlive() => owner.TargetObjectAlive();
         internal bool RunAnimatedHair => owner.RunAnimatedHair;
-        // a6-3
-        /// <summary>The rig is no longer resting: keep it stepping for the settle window (the stepping loop).</summary>
-        internal void BeginBiomechanicalSettle() => owner.BeginBiomechanicalSettle();
     }
 }

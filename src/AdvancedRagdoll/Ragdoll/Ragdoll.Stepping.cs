@@ -126,10 +126,7 @@ public unsafe partial class Ragdoll
 
 
     private void BeginBiomechanicalSettle(float duration = BiomechanicalSettleDuration)
-    {
-        biomechanicalSettleRemaining = MathF.Max(biomechanicalSettleRemaining, duration);
-        prevAllAsleep = false;
-    }
+        => ctx.BeginBiomechanicalSettle(duration);
 
     private static float BodyBottom(in RagdollBone bone, BodyReference body)
     {

@@ -47,29 +47,9 @@ public unsafe partial class Ragdoll
     /// value through Skeleton.Transform.Scale. Prefer the draw object so collision follows live
     /// live scale changes, and retain the skeleton value as a safe fallback.
     /// </summary>
-    internal Vector3 GetCharacterScale(nint address, IHostSkeleton ns)
-    {
-        if (TryGetVisualScale(address, out var drawScale))
-            return drawScale;
+    internal Vector3 GetCharacterScale(nint address, IHostSkeleton ns) => ctx.GetCharacterScale(address, ns);
 
-        return GetSkeletonScale(ns);
-    }
-
-    private bool TryGetVisualScale(nint address, out Vector3 scale)
-    {
-        scale = Vector3.One;
-        if (address != nint.Zero)
-        {
-            if (actors.TryGetDrawScale(address, out scale))
-            {
-                if (IsFinite(scale) && MathF.Abs(scale.X) >= 1e-6f && MathF.Abs(scale.Y) >= 1e-6f && MathF.Abs(scale.Z) >= 1e-6f)
-                    return true;
-            }
-        }
-
-        scale = Vector3.One;
-        return false;
-    }
+    private bool TryGetVisualScale(nint address, out Vector3 scale) => ctx.TryGetVisualScale(address, out scale);
 
     // Capsules cannot represent non-uniform scale. Use the largest component so their volume
     // encloses the visual bone instead of leaving a thin axis that can pass through a corpse.

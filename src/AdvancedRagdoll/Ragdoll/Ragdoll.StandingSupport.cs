@@ -104,7 +104,7 @@ public unsafe partial class Ragdoll
                 bodyRef.Activity.SleepThreshold = -1f;
                 bodyRef.Awake = true;
             }
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
 
             BuildStandingConstraints(anchorWorldPos, uprightRot, anchorBoneName);
             standingActive = true;
@@ -238,7 +238,7 @@ public unsafe partial class Ragdoll
             }
 
             standingActive = false;
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
             ctx.Log.Info("Ragdoll: Standing support removed");
         }
 
@@ -256,7 +256,7 @@ public unsafe partial class Ragdoll
             wristFreq  = freq;
             BuildWristConstraint(ctx.Profile.Landmarks.Hand.Left, leftTarget);
             BuildWristConstraint(ctx.Profile.Landmarks.Hand.Right, rightTarget);
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
             return wristConstraints.Count > 0;
         }
 

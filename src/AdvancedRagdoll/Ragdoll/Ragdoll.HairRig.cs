@@ -374,7 +374,7 @@ public unsafe partial class Ragdoll
             ctx.RootRotation = skeletonRoot.Rotation;
             if (!FlexibleHairSolver.Finite(ctx.RootPosition) || !FlexibleHairSolver.Finite(ctx.RootRotation)) return;
             ctx.RootRotation = Quaternion.Normalize(ctx.RootRotation); ctx.RootRotationInverse = Quaternion.Inverse(ctx.RootRotation);
-            ctx.RootScale = ctx.Core.GetCharacterScale(playerAddress, skel);
+            ctx.RootScale = ctx.GetCharacterScale(playerAddress, skel);
             int headBone = ResolveBoneIndex(skel, ctx.Profile.Landmarks.Head);
             var bodyPose = skel.ModelPose;
             if (headBone < 0 || headBone >= bodyPose.Length) return;
