@@ -27,8 +27,6 @@ public unsafe partial class Ragdoll
     }
 
     private const float RecoilRelaxDuration = 0.45f;
-    private const float RecoilSwingAngle = 1.7f; // ~97° — wide arc during the recoil window
-    private struct RecoilRelax { public string Bone; public float Remaining; }
 
     /// <summary>Add an angular velocity to a bone's body (a rotational kick) and briefly release its
     /// joint (drop the motor, widen the swing limit) so the stump above a severed cut actually swings
@@ -63,9 +61,9 @@ public unsafe partial class Ragdoll
     }
 
     // Temporarily free a joint so its child can swing: zero the angular motor force and widen the
-    // swing-limit cone. Both are restored by TickRecoilRelaxers after the window.
+    // swing-limit cone. Both are restored by TickRecoilRelaxers after the window (the joint model).
     private void RelaxJointForRecoil(string boneName, float duration)
-        => RelaxJoint(boneName, duration, widenSwing: true);
+        => joints.RelaxJoint(boneName, duration, widenSwing: true);
 
     /// <summary>
     /// Release a joint's motor on impact so the limb hanging off it carries its own momentum through.
@@ -73,52 +71,7 @@ public unsafe partial class Ragdoll
     /// fly, a follow-through is a limb continuing under its own steam and must stay inside its anatomy.
     /// </summary>
     private void ReleaseJointForFollowThrough(string boneName, float duration)
-        => RelaxJoint(boneName, duration, widenSwing: false);
-
-    private void RelaxJoint(string boneName, float duration, bool widenSwing)
-    {
-        if (simulation == null) return;
-        var relaxed = false;
-        if (angularMotorByBone.TryGetValue(boneName, out var motor))
-        {
-            try
-            {
-                simulation.Solver.ApplyDescription(motor.Handle,
-                    new AngularMotor { TargetVelocityLocalA = Vector3.Zero, Settings = new MotorSettings(0f, 0f) });
-                relaxed = true;
-            }
-            catch { }
-        }
-        if (widenSwing && swingLimitByBone.TryGetValue(boneName, out var swing))
-        {
-            var wide = swing.Original;
-            wide.MaximumSwingAngle = MathF.Max(swing.Original.MaximumSwingAngle, RecoilSwingAngle);
-            try { simulation.Solver.ApplyDescription(swing.Handle, wide); relaxed = true; }
-            catch { }
-        }
-        if (relaxed)
-            recoilRelaxers.Add(new RecoilRelax { Bone = boneName, Remaining = duration });
-    }
-
-    private void TickRecoilRelaxers(float dt)
-    {
-        if (recoilRelaxers.Count == 0 || simulation == null) return;
-        for (int i = recoilRelaxers.Count - 1; i >= 0; i--)
-        {
-            var r = recoilRelaxers[i];
-            r.Remaining -= dt;
-            if (r.Remaining > 0f) { recoilRelaxers[i] = r; continue; }
-            recoilRelaxers.RemoveAt(i);
-            // Restore the motor the joint was BUILT with, rather than re-inventing one. This used to put
-            // an unlimited force back — so any joint the recoil had freed came back welded.
-            if (angularMotorByBone.TryGetValue(r.Bone, out var motor))
-                try { simulation.Solver.ApplyDescription(motor.Handle, motor.Original); }
-                catch { /* constraint gone (sim torn down) */ }
-            if (swingLimitByBone.TryGetValue(r.Bone, out var swing))
-                try { simulation.Solver.ApplyDescription(swing.Handle, swing.Original); }
-                catch { }
-        }
-    }
+        => joints.RelaxJoint(boneName, duration, widenSwing: false);
 
     /// <summary>
     /// Punt the ragdoll body nearest to <paramref name="from"/> within <paramref name="maxDist"/>.

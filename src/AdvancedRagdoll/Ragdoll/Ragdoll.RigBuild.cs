@@ -342,13 +342,13 @@ public unsafe partial class Ragdoll
         // for humanoids — unlike structural mesh geometry, this is not an Advanced Filter; it
         // replaces a fragile axis computation, not an authored collision volume.
         var bindPoseHingeFrames = !genericSkeleton
-            ? BuildBindPoseHingeFrames(skel)
+            ? joints.BuildBindPoseHingeFrames(skel)
             : new Dictionary<string, BindPoseHingeFrame>(StringComparer.Ordinal);
 
         // Deliberately NOT gated on RagdollVerboseLog: that flag also turns on per-step/per-joint
         // logging elsewhere, which floods the log file. This fires once per activation regardless.
         if (!genericSkeleton)
-            LogLegBoneStructureDiagnostics(skel, boneWorldPositions, boneWorldRotations);
+            joints.LogLegBoneStructureDiagnostics(skel, boneWorldPositions, boneWorldRotations);
 
         // --- Pass 2: Create physics bodies ---
         // Capsule center is offset from bone origin (joint) along the segment direction.
@@ -973,9 +973,9 @@ public unsafe partial class Ragdoll
                 }
                 else
                 {
-                    hingeAxisWorld = ComputeProfileHingeAxis(
+                    hingeAxisWorld = joints.ComputeProfileHingeAxis(
                         boneDef.AnatomicalRole, parentSegDir, segDirWorld, childBodyRef.Pose.Orientation);
-                    flexionDirectionWorld = ComputeHingeForward(
+                    flexionDirectionWorld = joints.ComputeHingeForward(
                         boneDef.AnatomicalRole, hingeAxisWorld, parentSegDir, segDirWorld);
                 }
                 var hingeAxisLocalChild = NormalizeOrFallback(Vector3.Transform(
@@ -1104,14 +1104,14 @@ public unsafe partial class Ragdoll
                     (boneDef.AnatomicalRole == SkeletonBoneRole.Knee || boneDef.AnatomicalRole == SkeletonBoneRole.Elbow) &&
                     TryGetAnatomicalRom(skeletonProfile, rb.Name, out hingeRom);
 
-                AddAnatomicalHingeFoldStop(rb.BodyHandle, parentHandle, childBodyRef, parentBodyRef,
+                joints.AddAnatomicalHingeFoldStop(rb.BodyHandle, parentHandle, childBodyRef, parentBodyRef,
                     boneDef, hingeAxisWorld, parentSegDir, segDirWorld, passiveLimitSpring,
                     hasHingeRom ? hingeRom.FlexionMax : (float?)null);
-                AddAnatomicalHingeRestBias(rb.BodyHandle, parentHandle, childBodyRef, parentBodyRef,
+                joints.AddAnatomicalHingeRestBias(rb.BodyHandle, parentHandle, childBodyRef, parentBodyRef,
                     boneDef, hingeAxisWorld, parentSegDir, segDirWorld);
 
                 if (hasHingeRom)
-                    AddAnatomicalHingeFlexionLimit(rb.BodyHandle, parentHandle, childBodyRef, parentBodyRef,
+                    joints.AddAnatomicalHingeFlexionLimit(rb.BodyHandle, parentHandle, childBodyRef, parentBodyRef,
                         boneDef, hingeAxisWorld, parentSegDir, segDirWorld, hingeRom, passiveLimitSpring);
 
                 if (settings.RagdollVerboseLog)
@@ -1149,7 +1149,7 @@ public unsafe partial class Ragdoll
                     var transverseWorld = ProjectOntoPlane(
                         Vector3.Transform(Vector3.UnitX, childBodyRef.Pose.Orientation), longAxisWorld);
                     transverseWorld = NormalizeOrFallback(transverseWorld,
-                        ComputeFallbackBallTwistReference(longAxisWorld));
+                        joints.ComputeFallbackBallTwistReference(longAxisWorld));
                     var secondTransverseWorld = NormalizeOrFallback(
                         Vector3.Cross(longAxisWorld, transverseWorld), Vector3.UnitZ);
                     var swivelWorld = secondTransverseWorld;
@@ -1279,7 +1279,7 @@ public unsafe partial class Ragdoll
                         // Anatomical boundary caps are WALLS (hard limitSpring): riding them on the
                         // soft-edge spring let body weight shove the legs 40° past every limit.
                         if (hasSwingRom)
-                            AddDirectionalSwingLimits(rb.Name, rb.BodyHandle, parentHandle,
+                            joints.AddDirectionalSwingLimits(rb.Name, rb.BodyHandle, parentHandle,
                                 childBodyRef, parentBodyRef, segDirWorld, anchorWorld,
                                 anatForwardWorld, anatLateralWorld, swingRom,
                                 ballSwingSpring, limitSpring);
@@ -1287,7 +1287,7 @@ public unsafe partial class Ragdoll
                         // Hip axial rotation: capped via the kneecap-facing axis (below), which
                         // stays valid at any flexion — see AddKneecapFacingLimits.
                         if (hipKneecapCaps)
-                            AddKneecapFacingLimits(rb.Name, rb.BodyHandle, parentHandle,
+                            joints.AddKneecapFacingLimits(rb.Name, rb.BodyHandle, parentHandle,
                                 childBodyRef, parentBodyRef, segDirWorld, anchorWorld,
                                 anatForwardWorld, anatLateralWorld, limitSpring);
 
@@ -1343,7 +1343,7 @@ public unsafe partial class Ragdoll
                         !hipKneecapCaps &&
                         boneDef.SwingLimit <= ballJointMaxSwing)
                     {
-                        var refDir = ComputeAnatomicalBallTwistReference(segDirWorld, parentSegDir);
+                        var refDir = joints.ComputeAnatomicalBallTwistReference(segDirWorld, parentSegDir);
                         var twistBasis = CreateTwistBasis(segDirWorld, refDir);
                         simulation.Solver.Add(rb.BodyHandle, parentHandle,
                             new TwistLimit
@@ -1404,7 +1404,7 @@ public unsafe partial class Ragdoll
                 var motor = new AngularMotor
                 {
                     TargetVelocityLocalA = Vector3.Zero,
-                    Settings = new MotorSettings(ResolveJointFriction(rb), motorDamping),
+                    Settings = new MotorSettings(joints.ResolveJointFriction(rb), motorDamping),
                 };
                 angularMotorByBone[rb.Name] = (
                     simulation.Solver.Add(rb.BodyHandle, parentHandle, motor), motor);

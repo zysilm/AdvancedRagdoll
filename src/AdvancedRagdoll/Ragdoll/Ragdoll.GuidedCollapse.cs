@@ -418,7 +418,7 @@ public unsafe partial class Ragdoll
 
             directedCollapseActive = true;
             ctx.PrevAllAsleep = false;
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
             ctx.Log.Info($"Ragdoll: directed collapse profile begun - profile={profile.Id} phases={profile.Phases.Count} duration={directedDuration:F2}");
         }
 
@@ -485,7 +485,7 @@ public unsafe partial class Ragdoll
 
             directedCollapseActive = true;
             ctx.PrevAllAsleep = false;
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
             ctx.Log.Info($"Ragdoll: directed kneel-pitch begun - duration={directedDuration:F2} footForce={directedFootForce:F0} pelvisForce={directedPelvisForce:F0} drop={directedDrop:F2} forward={directedForwardDistance:F2} pitch={pitchDegrees:F0}");
         }
 
@@ -515,7 +515,7 @@ public unsafe partial class Ragdoll
                 directedProfile = null;
                 directedPhaseIndex = 0;
                 directedPhaseElapsed = 0f;
-                ctx.Core.BeginBiomechanicalSettle();
+                ctx.BeginBiomechanicalSettle();
                 ctx.Log.Info("Ragdoll: directed kneel-pitch stopped");
             }
         }
@@ -836,7 +836,7 @@ public unsafe partial class Ragdoll
             entryConditioningElapsed = 0f;
             entryConditioningActive = true;
             ctx.WakeBodies();
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
             ctx.Log.Info($"Ragdoll: entry conditioning begun - stance={entryStanceWidth:F2} kneeAngles=({entryLeftKneeAngle:F1},{entryRightKneeAngle:F1})");
         }
 
@@ -845,7 +845,7 @@ public unsafe partial class Ragdoll
             if (!entryConditioningActive) return;
             entryConditioningActive = false;
             entryConditioningContinuation = null;
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
             ctx.Log.Info("Ragdoll: entry conditioning stopped");
         }
 

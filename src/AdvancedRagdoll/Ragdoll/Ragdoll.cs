@@ -61,10 +61,6 @@ public unsafe partial class Ragdoll : IDisposable
 
     // State
     private nint targetCharacterAddress { get => ctx.TargetCharacterAddress; set => ctx.TargetCharacterAddress = value; }
-    // EntityId captured at Activate — used every frame to detect that the target despawned
-    // and its object-table slot was reused by an unrelated character (so we don't freeze
-    // and write ragdoll bones onto the newcomer).
-    private uint targetEntityId;
     private Vector3 savedCharacterPosition; // original position before follow moved it
     private bool followWasActive;           // tracks toggle-off to restore position
     private float elapsed;
@@ -77,7 +73,6 @@ public unsafe partial class Ragdoll : IDisposable
     private bool triggerPoseKnown;
     private float triggerStagger;
     private float triggeredAt = -1f;
-    private bool physicsStarted;
 
     // Animation→physics handoff velocity sampling. During the activation-delay countdown the
     // death animation drives the bones; we snapshot each frame's model-space bone poses so that
@@ -112,19 +107,6 @@ public unsafe partial class Ragdoll : IDisposable
     private const float MaxFrameDelta = 0.1f;   // ignore huge gaps (loading screens, hitches)
     private const float BiomechanicalSettleDuration = 1.25f;
     private const float RagdollSleepThreshold = 0.03f;
-    // Short post-wake window that keeps the island awake long enough for passive constraints and
-    // contacts to resolve after grab/release or an external collision.
-    private float biomechanicalSettleRemaining;
-
-    // Set when an NPC collider genuinely moved (beyond the kinematic deadband) near the
-    // corpse this frame; consumed by the NEXT frame's resting decision (one frame of latency
-    // is fine — stepping resumes before the contact needs solving).
-    private bool npcColliderMovedNearCorpse;
-    private Vector3 corpseWakeCenter;
-
-    // The character's facing at activation (deaths start standing, so the root yaw is trustworthy).
-    // Anatomical anchor for hinge axes that must not depend on the pose the body died in.
-    private Vector3 anatomicalForward;
 
     // Skeleton world transform (captured at activation from Skeleton.Transform)
     // ModelPose is in skeleton-local space; these convert to/from world space.
@@ -136,20 +118,6 @@ public unsafe partial class Ragdoll : IDisposable
     // Bone-to-body mapping
     private List<RagdollBone> ragdollBones => ctx.Bodies;
     private readonly HashSet<int> softKinematicBodyHandles = new();
-    // Kinematic proxies driven by living NPC/player skeletons. When corpse traversal is enabled,
-    // the narrow phase gives only these contacts the soft, low-friction material that prevents a
-    // walking character from punting the corpse sideways.
-    private readonly HashSet<int> npcCollisionKinematicBodyHandles = new();
-    // Auto-traversing swarm actors are root-driven from corpse support queries. Their proxy poses
-    // remain live as geometric probes, but contacts with this ragdoll are disabled to break the
-    // unstable kinematic-NPC -> dynamic-corpse -> root-correction feedback loop.
-    private readonly HashSet<int> npcTraversalGhostKinematicBodyHandles = new();
-    // Finite-mass foot carriers for autonomous swarm traversal. Cosmetic per-bone NPC
-    // kinematics stay ghosted; these dynamics are the sole two-way contact path to the corpse.
-    private readonly HashSet<int> npcTraversalDynamicBodyHandles = new();
-    private readonly object npcTraversalProxySync = new();
-    private readonly Dictionary<nint, NpcTraversalProxyRequest> npcTraversalProxyRequests = new();
-    private readonly Dictionary<nint, NpcTraversalProxy> npcTraversalProxies = new();
     // Soft-tissue (SoftBody) rig bodies — excluded from ALL contact generation (see
     // RagdollNarrowPhaseCallbacks.SoftBodyBodies).
     private readonly HashSet<int> softBodyBodyHandles = new();
@@ -180,7 +148,6 @@ public unsafe partial class Ragdoll : IDisposable
         public float Mass;
         public float GaitPhase;
     }
-    private bool npcTraversalProxyActivityThisFrame;
 
     // Bone defs actually used for the active ragdoll, keyed by name. For humanoid
     // skeletons these are the tuned human defs; for non-humanoid skeletons they are
@@ -219,6 +186,17 @@ public unsafe partial class Ragdoll : IDisposable
     // a6-4
     // True once BEPU has put the complete ragdoll constraint island to sleep (SimulationContext.PrevAllAsleep).
     private bool prevAllAsleep { get => ctx.PrevAllAsleep; set => ctx.PrevAllAsleep = value; }
+    // a6-6
+    private bool physicsStarted { get => ctx.PhysicsStarted; set => ctx.PhysicsStarted = value; }
+    // Short post-wake window that keeps the island awake (SimulationContext.BiomechanicalSettleRemaining).
+    private float biomechanicalSettleRemaining
+    {
+        get => ctx.BiomechanicalSettleRemaining;
+        set => ctx.BiomechanicalSettleRemaining = value;
+    }
+    // a6-7
+    // EntityId captured at Activate (SimulationContext.TargetEntityId).
+    private uint targetEntityId { get => ctx.TargetEntityId; set => ctx.TargetEntityId = value; }
 
     /// <summary>Registers the host's default humanoid profile and builds its bone tables (<see cref="AllBoneDefaults"/>,
     /// <see cref="DefaultBoneDefs"/>). Once per process (the same profile again is accepted), before the tables are
@@ -295,12 +273,6 @@ public unsafe partial class Ragdoll : IDisposable
     // Head bone index (the profile's head) — used for hair physics and partial skeleton propagation
     private int kaoBodyBoneIndex = -1;
 
-    // Face traversal landmarks are sampled once while InitializePhysics owns a coherent
-    // render-frame skeleton snapshot, then expressed in head-local coordinates. Runtime
-    // traversal never reads PartialSkeleton.ModelPose: that memory is rewritten later in the
-    // render hook and is not a stable data source from Framework.Update.
-    private readonly List<FaceTraversalLandmark> faceTraversalLandmarks = new();
-
     private readonly struct FaceTraversalLandmark
     {
         public readonly int Id;
@@ -314,14 +286,6 @@ public unsafe partial class Ragdoll : IDisposable
             Label = label;
         }
     }
-
-    // NPC bone collision — per-bone static capsules for active targets
-    private readonly List<NpcCollisionState> npcCollisionStates = new();
-    // Swarm followers keep their allocated bone proxies so detail can be restored without removing
-    // bodies from a live BEPU simulation, but only a small representative subset is active. This
-    // bounds the number of constraints that can converge on one corpse body when a large pack crowds
-    // around it (and avoids BEPU 2.5 beta's SequentialFallbackBatch removal bug).
-    private readonly HashSet<nint> lightweightNpcCollisionAddresses = new();
 
 
     /// <summary>True from <see cref="Activate(in RagdollActivation)"/> until <see cref="Deactivate"/> (or until the ragdoll
@@ -346,12 +310,6 @@ public unsafe partial class Ragdoll : IDisposable
     /// <summary>Default enabled bones with physics parents resolved through the skeleton tree.</summary>
     internal static RagdollBoneDef[] DefaultBoneDefs => defaultBoneDefs ?? throw NoHumanoidProfile();
 
-    private readonly Dictionary<nint, NpcTraversalAnchor> npcTraversalAnchors = new();
-
-    // Traversal queries are sequential on the framework thread. Reusing one small buffer avoids a
-    // List allocation for every follower and every preview sample (hundreds per frame in a swarm).
-    private readonly List<NpcTraversalCapsule> npcTraversalCapsuleBuffer = new(16);
-
     /// <summary>
     /// A ragdoll on the given host services, with the guided-collapse profiles it may play. The caller drives it:
     /// <see cref="OnRenderFrame"/> once per rendered frame, <see cref="OnFrameworkTick"/> once per game tick, and the
@@ -362,7 +320,6 @@ public unsafe partial class Ragdoll : IDisposable
         ArgumentNullException.ThrowIfNull(profile);
         // The default profile keeps the process-wide table (the same array every ragdoll used to share).
         var profileBoneDefaults = ReferenceEquals(profile, humanoidProfile) ? allBoneDefaults! : ToBoneConfigs(profile.BoneDefinitions);
-        anatomicalForward = profile.Forward;
         this.host = host;
         var hostSkeletons = host.Skeletons;
         // The recorder observes these four from outside (Hosting/RecordingDecorators.cs).
@@ -396,35 +353,21 @@ public unsafe partial class Ragdoll : IDisposable
         // a6-5
         external = new ExternalBodies(ctx);
         softTissue = new SoftTissue(ctx);
+        // a6-6
+        characterColliders = new CharacterColliders(ctx);
+        corpseTraversal = new CorpseTraversal(ctx);
+        // a6-7
+        joints = new JointModel(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
 
-    // Relaxed passive hip axial rotation. Clinical standing values are ~35°/45°
-    // (int/ext); deep flexion winds the capsular ligaments and shrinks them further,
-    // which the kneecap-facing construction below approximates by making combined
-    // flexion+rotation spend the same budget as pure rotation.
-    private static readonly float HipInternalRotationCap = D2R(30f);
-    private static readonly float HipExternalRotationCap = D2R(45f);
-
-    private readonly List<SwingStressMonitor> swingStressMonitors = new();
-    private readonly Dictionary<string, JointLimitStress> stressWorstByBone = new();
-
-    private float traversalMassMultiplier = 1f;
 
     // The guided-collapse profiles this ragdoll may play (the directed collapse, Ragdoll.GuidedCollapse.cs).
     private readonly ICollapseProfileSource collapseProfileBook;
 
     // Knee power-loss tuning is fixed at the settings class defaults (no longer exposed in the UI).
     private static readonly GuidedCollapseKneePowerLossSettings KneePowerLossDefaults = new();
-
-    // Each joint's angular motor drives the parent/child relative angular velocity to zero with
-    // unlimited force, and a SwingLimit caps the cone the child may swing into — together they make
-    // a recoil kick invisible. For a brief window we drop the motor force AND widen the swing limit
-    // (keyed by child bone), so the stump actually swings up, then restore both.
-    private readonly Dictionary<string, (ConstraintHandle Handle, AngularMotor Original)> angularMotorByBone = new();
-    private readonly Dictionary<string, (ConstraintHandle Handle, SwingLimit Original)> swingLimitByBone = new();
-    private readonly List<RecoilRelax> recoilRelaxers = new();
 
     // ─────────────────────────────────────────────────────────────────────────
 

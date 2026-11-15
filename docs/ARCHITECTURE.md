@@ -207,3 +207,32 @@ bodies move the collected rigs by the same delta. What needs the settle window, 
 body's shape, removing a rig's bodies) or the weapon-contact surfaces stays in the ragdoll's own `*Core` method; the soft
 tissue gets the bone definitions and the frame counter passed in. The rig build still fills the leashes and resets the
 squash state through forwarding properties.
+
+<!-- a6-6 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `CharacterColliders` | `Ragdoll.Colliders.cs` | the colliders of the other characters (per character: bone capsules, a skinned mesh or one fallback capsule), the lightweight set, the two kinematic body sets the narrow phase reads for them, the corpse bounds and wake centre, whether a collider moved near the corpse this frame |
+| `CorpseTraversal` | `Ragdoll.CorpseTraversal.cs` | the retained support pairs of the NPCs standing on the corpse and the capsule query buffer, the face landmarks, the traversal mass multiplier, the finite-mass carriers of autonomous followers with their requests, lock and body set |
+
+Since A6-6 the context also holds whether physics has started and the settle window (`BeginBiomechanicalSettle`, with
+its duration), and reads the character scale (`GetCharacterScale`, `TryGetVisualScale`); `CoreCalls` no longer carries
+either. The colliders component builds the bone capsules and owns the kinematic moves (parking, rescaling, the wake
+note) and the lightweight and traversal-ghost switches. What reads and records the host stays in the ragdoll: the
+skeleton read at build, the fallback capsule (its actor position is read between the shape and the body), the mesh
+collider (its triangles are recorded), and the per-frame tracking loop of the stepping, which also drives the strike
+window and the grab's parked grabber; adding and removing a live collider stays too (strike colliders, recorded calls).
+A support query is split the same way: the ragdoll finds the NPC's collider state, the component collects its capsules,
+the ragdoll reads and records the NPC's root, the component resolves the height. The character surface the queries use
+belongs to `SurfaceRuntime`, so the ragdoll hands it in.
+
+<!-- a6-7 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `JointModel` | `Ragdoll.Joints.cs` | the character's anatomical facing, the joint frames (bind-pose hinge frames, anatomical hinge axes and fold directions, ball twist references), the anatomical additions to a joint (fold stop, signed flexion limit, passive hinge rest, directional and kneecap-facing swing caps), the joint friction, the swing-limit stress monitors, each joint's motor and swing limit as built, and the brief joint release after a recoil or a landing |
+
+Since A6-7 the context also holds the target's entity id, whether the host runs the live hair on this ragdoll and the
+settle window (starting it, the target's liveness check and the character scale are context methods), so `CoreCalls`
+no longer carries the settle window, the liveness check, the live-hair flag or the character scale. The rig build still
+creates each joint's own constraints (ball sockets, hinges, swivel hinges, cones, twist limits, servos, motors) inline,
+in the same order, and calls the joint model for the anatomical additions at the same points; it records the motors
+and swing limits for the release through forwarding properties. Moving that loop belongs to the rig build stage.
