@@ -83,6 +83,16 @@ Each runs a fixed number of render frames of 1/60 s on a manual clock:
 - `teardown-mid-contact`: deactivations in the middle of the standing support with wrist constraints, a carried worn
   rig, a recoil relax and an open strike window, and later in the middle of two grabs (the grabber parked); after each
   reactivation the state that carries over (grab slot ids, a release of a slot of the earlier activation).
+- `grab-anchored` (added with `CreateGrabConstraintAt`, after the nine above; its golden file was written from the
+  library that introduced the call): the anchored grab refused before physics, for a non-finite grip point and a
+  missing bone; the left forearm (`arm_b_l`, a body of its own) held by a point on its capsule's surface 0.05 m along
+  and one radius off its axis, the target 0.5 m up and 0.3 m forward, held, then swept 0.4 m sideways; released; then
+  a rigid anchored grab without a grabber on `hand_end_r` (no body: carried by `hand_r`) at a point of the hand's
+  surface, the target 0.6 m up and drifting forward; released. While a grab holds, an `M` line per frame (see below);
+  the console summary gives the distance from the anchored point to the target, the body centre's distance and how
+  far the body has turned at 0, 5, 10, 20, 40 and 80 frames after the grab. This scenario reads the private grab slot
+  (`grab.Slots`: the body, `LocalOffset`, `TargetPosition`) and calls `TryGetBoneCapsule`, so the harness no longer
+  compiles against a library without `CreateGrabConstraintAt`.
 
 ## Output
 
@@ -105,7 +115,10 @@ One line per event, `\n` line ends, every float as the hex of its bits:
   velocity): every awake dynamic body for 30 frames after any call and every tenth frame; all bodies every twentieth
   frame, after an `S bodies<= active= statics=` line;
 - `H <hash> awake=<n> constraints=<n>`: every frame, a hash of the exact bits of every body (handle, kind, sleep
-  state, pose, velocities), the awake bodies and the solver's constraint count.
+  state, pose, velocities), the awake bodies and the solver's constraint count;
+- `M <label> anchor= target= d= centre= angle=` (`grab-anchored` only, after the frame): the anchored point of a held
+  grab (the body's pose applied to the slot's grip offset), the grab's live target, their distance, the body centre's
+  distance from the target, and the angle in radians the body has turned since it was caught.
 
 On a difference the test prints the scenario, the first differing line with its frame, and both versions of the line.
 

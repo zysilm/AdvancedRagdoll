@@ -46,6 +46,7 @@ var scenarios = new (string Name, Action<Output> Run)[]
     ("pokes-recoil-shake", Scenarios.PokesRecoilShake),
     ("strike-window-forced", Scenarios.StrikeWindowForced),
     ("teardown-mid-contact", Scenarios.TeardownMidContact),
+    ("grab-anchored", Scenarios.GrabAnchored),
 };
 
 var failed = 0;

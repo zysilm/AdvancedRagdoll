@@ -190,6 +190,20 @@ own method does that step and passes the value in (for example whether a grab or
 the attachment a grab resolved), so the components do not reference each other (A6-13 later made a few such references explicit; see the dependency table above). The ragdoll's direct pokes (impulse,
 angular kick, punt, shake) and the grab-attachment queries stay with the ragdoll.
 
+The grab has two recorded entry points, both on the ragdoll and both ending in `Grab.Create`.
+`CreateGrabConstraint(bone, target, grabber, maxForce, maxSpeed, springFreq)` holds the bone: the servo's local
+offset is the one `TryResolveGrabAttachment` works out (zero for a bone with a body of its own, the bone's place on the
+nearest ancestor's body otherwise). `CreateGrabConstraintAt(bone, worldGripPoint, target, grabber, maxForce, maxSpeed,
+springFreq)` (the anchored grab, for a hand closing on a point of the body's surface) resolves the carrying body the
+same way, then replaces the offset with `inverse(body orientation) * (worldGripPoint - body position)`, read from the
+body's pose at that moment; it refuses a non-finite grip point. From there both are the same grab: the hold starts at
+the grip point where it lies, the 0.18 s pull-in, the speed cap, the force floor, `UpdateGrabTarget`,
+`SetGrabTuning` and `RemoveGrabConstraint`. The anchored call is recorded as a `Call` record named
+`CreateGrabConstraintAt` (bone, grip point, target, grabber, the three tuning values, then `GrabRigid`), followed by
+the nested `TryResolveGrabAttachment` call and an `ApiReturn`. A new call name needs no format version: the version
+covers the meaning of existing records, and only files that use the call contain it (a replay that does not drive it
+reports it as unsupported).
+
 <!-- a6-4 -->
 | Component | File | Owns |
 | --- | --- | --- |

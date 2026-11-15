@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using System.Reflection;
 using AdvancedRagdoll;
 using AdvancedRagdoll.Tests;
 
@@ -455,6 +456,131 @@ internal static class Scenarios
             });
         }
         output.Summary = rig.Finals();
+    }
+
+    // ------------------------------------------------------------------ anchored grab
+
+    /// <summary>A held anchored grab as the test sees it: the slot's body and grip offset (read from the private grab
+    /// slot, so the line shows what the library stored), and the body's orientation when it was caught.</summary>
+    private sealed class AnchorTrack
+    {
+        public required string Label;
+        public required int Slot;
+        public required Quaternion CaughtOrientation;
+        public int Frames;
+        public readonly List<string> Samples = new();
+    }
+
+    private static readonly int[] AnchorSampleFrames = [0, 5, 10, 20, 40, 80];
+
+    private static object? GrabSlotOf(Rig rig, int slot)
+    {
+        var grab = typeof(Ragdoll).GetField("grab", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(rig.Ragdoll)!;
+        var slots = (System.Collections.IDictionary)grab.GetType().GetProperty("Slots", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(grab)!;
+        return slots.Contains(slot) ? slots[slot] : null;
+    }
+
+    private static T SlotField<T>(object slot, string name) => (T)slot.GetType().GetField(name)!.GetValue(slot)!;
+
+    /// <summary>Writes the anchored point of a held grab against its target: <c>M label anchor= target= d= centre=
+    /// angle=</c> (the grip point on the body, the grab's live target, their distance, the body centre's distance from
+    /// the target, how far the body has turned since it was caught, in radians).</summary>
+    private static void Measure(Rig rig, AnchorTrack track)
+    {
+        if (GrabSlotOf(rig, track.Slot) is not { } slot || rig.Simulation is not { } sim) return;
+        var body = sim.Bodies.GetBodyReference(SlotField<BepuPhysics.BodyHandle>(slot, "BodyHandle"));
+        var pose = body.Pose;
+        var anchor = pose.Position + Vector3.Transform(SlotField<Vector3>(slot, "LocalOffset"), pose.Orientation);
+        var target = SlotField<Vector3>(slot, "TargetPosition");
+        var d = Vector3.Distance(anchor, target);
+        var centre = Vector3.Distance(pose.Position, target);
+        var angle = 2f * MathF.Acos(MathF.Min(1f, MathF.Abs(Quaternion.Dot(pose.Orientation, track.CaughtOrientation))));
+        rig.Output.Line($"M {track.Label} anchor={P(anchor)} target={P(target)} d={Output.F(d)} centre={Output.F(centre)} angle={Output.F(angle)}");
+        if (Array.IndexOf(AnchorSampleFrames, track.Frames) >= 0)
+            track.Samples.Add($"+{track.Frames}: d {d:F3} centre {centre:F3} turned {angle * 180f / MathF.PI:F0}deg");
+        track.Frames++;
+    }
+
+    /// <summary>Anchored grabs (<c>CreateGrabConstraintAt</c>): refused before physics, for a non-finite grip point and
+    /// a missing bone; a forearm (a bone with its own body) held by a point on its surface off the bone's axis, the
+    /// target lifted and swept sideways; then, rigid and without a grabber, a bone without a body (the right hand's
+    /// end, carried by the hand) held by a point of the hand's surface, the target lifted. Each held frame writes the
+    /// anchored point against the target (see <see cref="Measure"/>); the summary gives the distance at fixed frames
+    /// after the grab.</summary>
+    public static void GrabAnchored(Output output)
+    {
+        using var rig = new Rig(output, Flat, Stance.NarrowStraight, 0f, 0f, 0f, seed: 17);
+        rig.Settings.NpcCollisionAutoSize = true;
+        rig.AddAttacker(Stance.WideBent, 0.9f);
+        rig.Activate(0.05f);
+        int? fore = null, tip = null;
+        var foreTarget = Vector3.Zero;
+        var tipTarget = Vector3.Zero;
+        AnchorTrack? foreTrack = null, tipTrack = null;
+        var tracks = new List<AnchorTrack>();
+
+        AnchorTrack? Track(string label, int? slot, Quaternion caught)
+        {
+            if (slot is not { } id) return null;
+            var t = new AnchorTrack { Label = label, Slot = id, CaughtOrientation = caught };
+            tracks.Add(t);
+            return t;
+        }
+
+        for (var f = 0; f < 300; f++)
+        {
+            rig.RenderFrame(() =>
+            {
+                if (f == 1)
+                    rig.Call("CreateGrabConstraintAt before physics", () => rig.Ragdoll.CreateGrabConstraintAt("arm_b_l", Vector3.Zero, Vector3.Zero));
+                if (f == 8) rig.Call("AddLiveCollider attacker", () => rig.Ragdoll.AddLiveCollider(Rig.Attacker));
+                if (f == 40)
+                {
+                    rig.Ragdoll.TryGetBoneCapsule("arm_b_l", out var c);
+                    // On the forearm's surface (a radius off its axis), a little toward the hand.
+                    var grip = c.Center + Vector3.Transform(new Vector3(c.Radius, 0.05f, 0f), c.Orientation);
+                    rig.Call("CreateGrabConstraintAt arm_b_l NaN", () => rig.Ragdoll.CreateGrabConstraintAt("arm_b_l",
+                        new Vector3(float.NaN, 0f, 0f), grip));
+                    rig.Call("CreateGrabConstraintAt missing", () => rig.Ragdoll.CreateGrabConstraintAt("missing_bone", grip, grip));
+                    foreTarget = grip + Up * 0.5f + rig.Forward * 0.3f;
+                    fore = rig.Call($"CreateGrabConstraintAt arm_b_l {P(grip)}", () => rig.Ragdoll.CreateGrabConstraintAt("arm_b_l",
+                        grip, foreTarget, Rig.Attacker));
+                    foreTrack = Track("forearm", fore, c.Orientation);
+                }
+                if (f > 40 && f <= 140 && fore is { } fs)
+                {
+                    // Held still for a second, then swept 0.4 m sideways.
+                    var sweep = f <= 100 ? 0f : 0.4f * (f - 100) / 40f;
+                    rig.Ragdoll.UpdateGrabTarget(fs, foreTarget + rig.Right * sweep);
+                }
+                if (f == 150)
+                {
+                    rig.Call("RemoveGrabConstraint forearm", () => rig.Ragdoll.RemoveGrabConstraint(fore!.Value));
+                    fore = null;
+                }
+                if (f == 170)
+                {
+                    rig.Ragdoll.TryGetBoneCapsule("hand_r", out var c);
+                    var grip = c.Center + Vector3.Transform(new Vector3(c.Radius, 0.02f, 0.01f), c.Orientation);
+                    tipTarget = grip + Up * 0.6f;
+                    rig.Call("GrabRigid = true", () => { rig.Ragdoll.GrabRigid = true; });
+                    tip = rig.Call($"CreateGrabConstraintAt hand_end_r {P(grip)}", () => rig.Ragdoll.CreateGrabConstraintAt("hand_end_r",
+                        grip, tipTarget, 0, 1200f, 8f, 60f));
+                    rig.Call("GrabRigid = false", () => { rig.Ragdoll.GrabRigid = false; });
+                    tipTrack = Track("hand_end", tip, c.Orientation);
+                }
+                if (f > 170 && f <= 260 && tip is { } ts)
+                    rig.Ragdoll.UpdateGrabTarget(ts, tipTarget + rig.Forward * (0.003f * (f - 170)));
+                if (f == 270)
+                {
+                    rig.Call("RemoveGrabConstraint hand_end", () => rig.Ragdoll.RemoveGrabConstraint(tip!.Value));
+                    tip = null;
+                }
+            });
+            if (fore != null && foreTrack != null) Measure(rig, foreTrack);
+            if (tip != null && tipTrack != null) Measure(rig, tipTrack);
+        }
+        output.Summary = rig.Finals() + "; " + string.Join("; ", tracks.Select(t => $"{t.Label} {string.Join(", ", t.Samples)}"));
     }
 
     // ------------------------------------------------------------------ landings

@@ -57,6 +57,29 @@ public unsafe partial class Ragdoll
     /// Also ensures all ragdoll bodies stay awake (SleepThreshold = -1).
     /// </summary>
     private int? CreateGrabConstraintCore(string boneName, Vector3 initialTarget, nint grabbingNpcAddress = 0, float maxForce = 1000f, float maxSpeed = 50f, float springFreq = 120f)
+        => CreateGrabSlotCore(boneName, null, initialTarget, grabbingNpcAddress, maxForce, maxSpeed, springFreq);
+
+    /// <summary>
+    /// The anchored grab: the same grab as <see cref="CreateGrabConstraintCore"/> on the body that carries
+    /// <paramref name="boneName"/> (its own, or the nearest ancestor's), but the servo holds the exact world point
+    /// <paramref name="worldGripPoint"/> (a point on the body's surface where a hand closed) instead of the bone.
+    /// The point is fixed in the carrying body's frame at creation, so the body hangs and turns about it. Everything
+    /// after that (the pull-in, the speed cap, the force floor, the target updates, the release) is the plain grab's.
+    /// </summary>
+    private int? CreateGrabConstraintAtCore(string boneName, Vector3 worldGripPoint, Vector3 initialTarget, nint grabbingNpcAddress = 0, float maxForce = 1000f, float maxSpeed = 50f, float springFreq = 120f)
+    {
+        if (simulation == null || !isActive) return null;
+        if (!float.IsFinite(worldGripPoint.X) || !float.IsFinite(worldGripPoint.Y) || !float.IsFinite(worldGripPoint.Z))
+        {
+            log.Warning($"Ragdoll: anchored grab on '{boneName}' refused: the grip point is not finite");
+            return null;
+        }
+        return CreateGrabSlotCore(boneName, worldGripPoint, initialTarget, grabbingNpcAddress, maxForce, maxSpeed, springFreq);
+    }
+
+    /// <summary>Both grabs. <paramref name="worldGripPoint"/> null holds the bone itself (the offset
+    /// <see cref="TryResolveGrabAttachment"/> works out); a point holds that point of the carrying body.</summary>
+    private int? CreateGrabSlotCore(string boneName, Vector3? worldGripPoint, Vector3 initialTarget, nint grabbingNpcAddress, float maxForce, float maxSpeed, float springFreq)
     {
         if (simulation == null || !isActive) return null;
 
@@ -64,6 +87,16 @@ public unsafe partial class Ragdoll
         {
             log.Warning($"Ragdoll: nothing on the rig carries bone '{boneName}'");
             return null;
+        }
+
+        if (worldGripPoint is { } point)
+        {
+            // The grip point in the carrying body's own frame, read from its pose right now: from here on the servo
+            // pulls that point of the body, however the body turns.
+            var carrier = simulation.Bodies.GetBodyReference(targetBody);
+            localOffset = Vector3.Transform(point - carrier.Pose.Position, Quaternion.Inverse(carrier.Pose.Orientation));
+            log.Info($"Ragdoll: grab on '{boneName}' anchored at ({point.X:F2},{point.Y:F2},{point.Z:F2}), " +
+                     $"{localOffset.Length():F3}m off the centre of the body that carries it");
         }
 
         // External controllers have exclusive ownership. A standing/posed support left alive here

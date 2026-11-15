@@ -1578,6 +1578,27 @@ public unsafe partial class Ragdoll
         finally { RecLeave(); }
     }
 
+    /// <summary>The anchored grab (see CreateGrabConstraintAtCore): recorded like <see cref="CreateGrabConstraint"/>,
+    /// with the grip point after the bone name.</summary>
+    internal int? CreateGrabConstraintAt(string boneName, Vector3 worldGripPoint, Vector3 initialTarget, nint grabbingNpcAddress = 0, float maxForce = 1000f, float maxSpeed = 50f, float springFreq = 120f)
+    {
+        var w = rec;
+        if (w == null) return CreateGrabConstraintAtCore(boneName, worldGripPoint, initialTarget, grabbingNpcAddress, maxForce, maxSpeed, springFreq);
+        using (RecCall(w, nameof(CreateGrabConstraintAt)))
+        {
+            w.Str(boneName); w.V3(worldGripPoint); w.V3(initialTarget); w.U64((ulong)grabbingNpcAddress); w.F32(maxForce); w.F32(maxSpeed); w.F32(springFreq);
+            w.Bool(GrabRigid); // read by the call, set through the property
+        }
+        RecEnter();
+        try
+        {
+            var slot = CreateGrabConstraintAtCore(boneName, worldGripPoint, initialTarget, grabbingNpcAddress, maxForce, maxSpeed, springFreq);
+            using (w.Begin(RecordType.ApiReturn)) { w.Str(nameof(CreateGrabConstraintAt)); w.Bool(slot.HasValue); w.I32(slot ?? 0); }
+            return slot;
+        }
+        finally { RecLeave(); }
+    }
+
     /// <summary>
     /// Work out what a grab on this bone should actually take hold of: the bone's own body, or the
     /// body of the nearest ancestor that has one, with the offset of the requested bone in that
