@@ -53,7 +53,7 @@ public unsafe partial class Ragdoll
 
         // Weapon and hair contacts need the cache on the main controller only; body mesh volumes need it everywhere.
         private bool FrozenMeshCacheWanted => ctx.Settings.RagdollMeshVolumes ||
-            (ctx.Settings.WeaponBodyMeshContacts || ctx.Settings.RagdollHairPhysics && ctx.Settings.RagdollHairBodyMesh) && ctx.Core.RunAnimatedHair;
+            (ctx.Settings.WeaponBodyMeshContacts || ctx.Settings.RagdollHairPhysics && ctx.Settings.RagdollHairBodyMesh) && ctx.RunAnimatedHair;
 
         // Called from the render owner even while inactive. Only the main controller preloads
         // the local player; other controllers capture their own target on first activation.
@@ -80,8 +80,8 @@ public unsafe partial class Ragdoll
             nint address;
             if (settings.RagdollMeshVolumes)
             {
-                if (ctx.IsActive && !ctx.Core.TargetObjectAlive()) return;
-                address = ctx.IsActive ? ctx.TargetCharacterAddress : ctx.Core.RunAnimatedHair ? localPlayer : 0;
+                if (ctx.IsActive && !ctx.TargetObjectAlive()) return;
+                address = ctx.IsActive ? ctx.TargetCharacterAddress : ctx.RunAnimatedHair ? localPlayer : 0;
             }
             else address = localPlayer; // Weapon-only: other actors are captured on demand by GetWeaponContactMesh.
             if (address == 0) return;

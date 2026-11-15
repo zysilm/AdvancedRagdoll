@@ -61,10 +61,6 @@ public unsafe partial class Ragdoll : IDisposable
 
     // State
     private nint targetCharacterAddress { get => ctx.TargetCharacterAddress; set => ctx.TargetCharacterAddress = value; }
-    // EntityId captured at Activate — used every frame to detect that the target despawned
-    // and its object-table slot was reused by an unrelated character (so we don't freeze
-    // and write ragdoll bones onto the newcomer).
-    private uint targetEntityId;
     private Vector3 savedCharacterPosition; // original position before follow moved it
     private bool followWasActive;           // tracks toggle-off to restore position
     private float elapsed;
@@ -112,19 +108,12 @@ public unsafe partial class Ragdoll : IDisposable
     private const float MaxFrameDelta = 0.1f;   // ignore huge gaps (loading screens, hitches)
     private const float BiomechanicalSettleDuration = 1.25f;
     private const float RagdollSleepThreshold = 0.03f;
-    // Short post-wake window that keeps the island awake long enough for passive constraints and
-    // contacts to resolve after grab/release or an external collision.
-    private float biomechanicalSettleRemaining;
 
     // Set when an NPC collider genuinely moved (beyond the kinematic deadband) near the
     // corpse this frame; consumed by the NEXT frame's resting decision (one frame of latency
     // is fine — stepping resumes before the contact needs solving).
     private bool npcColliderMovedNearCorpse;
     private Vector3 corpseWakeCenter;
-
-    // The character's facing at activation (deaths start standing, so the root yaw is trustworthy).
-    // Anatomical anchor for hinge axes that must not depend on the pose the body died in.
-    private Vector3 anatomicalForward;
 
     // Skeleton world transform (captured at activation from Skeleton.Transform)
     // ModelPose is in skeleton-local space; these convert to/from world space.
@@ -219,6 +208,11 @@ public unsafe partial class Ragdoll : IDisposable
     // a6-4
     // True once BEPU has put the complete ragdoll constraint island to sleep (SimulationContext.PrevAllAsleep).
     private bool prevAllAsleep { get => ctx.PrevAllAsleep; set => ctx.PrevAllAsleep = value; }
+    // a6-7
+    // EntityId captured at Activate (SimulationContext.TargetEntityId).
+    private uint targetEntityId { get => ctx.TargetEntityId; set => ctx.TargetEntityId = value; }
+    // The settle window that keeps the island awake (SimulationContext.BiomechanicalSettleRemaining).
+    private float biomechanicalSettleRemaining { get => ctx.BiomechanicalSettleRemaining; set => ctx.BiomechanicalSettleRemaining = value; }
 
     /// <summary>Registers the host's default humanoid profile and builds its bone tables (<see cref="AllBoneDefaults"/>,
     /// <see cref="DefaultBoneDefs"/>). Once per process (the same profile again is accepted), before the tables are
@@ -362,7 +356,6 @@ public unsafe partial class Ragdoll : IDisposable
         ArgumentNullException.ThrowIfNull(profile);
         // The default profile keeps the process-wide table (the same array every ragdoll used to share).
         var profileBoneDefaults = ReferenceEquals(profile, humanoidProfile) ? allBoneDefaults! : ToBoneConfigs(profile.BoneDefinitions);
-        anatomicalForward = profile.Forward;
         this.host = host;
         var hostSkeletons = host.Skeletons;
         // The recorder observes these four from outside (Hosting/RecordingDecorators.cs).
@@ -396,19 +389,11 @@ public unsafe partial class Ragdoll : IDisposable
         // a6-5
         external = new ExternalBodies(ctx);
         softTissue = new SoftTissue(ctx);
+        // a6-7
+        joints = new JointModel(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
-
-    // Relaxed passive hip axial rotation. Clinical standing values are ~35°/45°
-    // (int/ext); deep flexion winds the capsular ligaments and shrinks them further,
-    // which the kneecap-facing construction below approximates by making combined
-    // flexion+rotation spend the same budget as pure rotation.
-    private static readonly float HipInternalRotationCap = D2R(30f);
-    private static readonly float HipExternalRotationCap = D2R(45f);
-
-    private readonly List<SwingStressMonitor> swingStressMonitors = new();
-    private readonly Dictionary<string, JointLimitStress> stressWorstByBone = new();
 
     private float traversalMassMultiplier = 1f;
 
@@ -417,14 +402,6 @@ public unsafe partial class Ragdoll : IDisposable
 
     // Knee power-loss tuning is fixed at the settings class defaults (no longer exposed in the UI).
     private static readonly GuidedCollapseKneePowerLossSettings KneePowerLossDefaults = new();
-
-    // Each joint's angular motor drives the parent/child relative angular velocity to zero with
-    // unlimited force, and a SwingLimit caps the cone the child may swing into — together they make
-    // a recoil kick invisible. For a brief window we drop the motor force AND widen the swing limit
-    // (keyed by child bone), so the stump actually swings up, then restore both.
-    private readonly Dictionary<string, (ConstraintHandle Handle, AngularMotor Original)> angularMotorByBone = new();
-    private readonly Dictionary<string, (ConstraintHandle Handle, SwingLimit Original)> swingLimitByBone = new();
-    private readonly List<RecoilRelax> recoilRelaxers = new();
 
     // ─────────────────────────────────────────────────────────────────────────
 

@@ -237,7 +237,7 @@ public unsafe partial class Ragdoll
 
             kneePowerLossActive = true;
             ctx.PrevAllAsleep = false;
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
             ctx.Log.Info("Ragdoll: knee power-loss forward begun");
         }
 
@@ -266,7 +266,7 @@ public unsafe partial class Ragdoll
             if (kneePowerLossActive)
             {
                 kneePowerLossActive = false;
-                ctx.Core.BeginBiomechanicalSettle();
+                ctx.BeginBiomechanicalSettle();
                 ctx.Log.Info("Ragdoll: knee power-loss forward stopped");
             }
         }

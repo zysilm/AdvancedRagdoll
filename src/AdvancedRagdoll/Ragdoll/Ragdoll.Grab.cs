@@ -319,7 +319,7 @@ public unsafe partial class Ragdoll
                 bodyRef.Awake = true;
             }
             // The rig is no longer resting; force a full physics step next frame.
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
 
             slot.IsRigid = rigid;
 
@@ -480,7 +480,7 @@ public unsafe partial class Ragdoll
             }
 
             SuspendedNpcAddress = nint.Zero;
-            ctx.Core.BeginBiomechanicalSettle();
+            ctx.BeginBiomechanicalSettle();
 
             ctx.Log.Info("Ragdoll: Grab constraint removed");
         }

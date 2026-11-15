@@ -207,3 +207,15 @@ bodies move the collected rigs by the same delta. What needs the settle window, 
 body's shape, removing a rig's bodies) or the weapon-contact surfaces stays in the ragdoll's own `*Core` method; the soft
 tissue gets the bone definitions and the frame counter passed in. The rig build still fills the leashes and resets the
 squash state through forwarding properties.
+
+<!-- a6-7 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `JointModel` | `Ragdoll.Joints.cs` | the character's anatomical facing, the joint frames (bind-pose hinge frames, anatomical hinge axes and fold directions, ball twist references), the anatomical additions to a joint (fold stop, signed flexion limit, passive hinge rest, directional and kneecap-facing swing caps), the joint friction, the swing-limit stress monitors, each joint's motor and swing limit as built, and the brief joint release after a recoil or a landing |
+
+Since A6-7 the context also holds the target's entity id, whether the host runs the live hair on this ragdoll and the
+settle window (starting it, the target's liveness check and the character scale are context methods), so `CoreCalls`
+no longer carries the settle window, the liveness check, the live-hair flag or the character scale. The rig build still
+creates each joint's own constraints (ball sockets, hinges, swivel hinges, cones, twist limits, servos, motors) inline,
+in the same order, and calls the joint model for the anatomical additions at the same points; it records the motors
+and swing limits for the release through forwarding properties. Moving that loop belongs to the rig build stage.
