@@ -114,6 +114,45 @@ public unsafe partial class Ragdoll
                 if (rb.Name == boneName) return rb.BodyHandle;
             return null;
         }
+
+        // a6-5
+        /// <summary>
+        /// Remove every constraint still attached to <paramref name="body"/>. BEPU corrupts the solver if a
+        /// body is removed while constraints reference it: the constraint keeps a now-dangling body index,
+        /// and the next island-sleeper traversal (Solver.EnumerateConnectedBodyReferences) faults on it —
+        /// far from the real cause. The debug assert that would catch this is compiled out in release, so
+        /// every body removal must run this first. Idempotent: a body whose constraints are already gone
+        /// enumerates an empty list.
+        /// </summary>
+        internal void RemoveConstraintsOnBody(BodyHandle body)
+        {
+            var simulation = Simulation;
+            if (simulation == null) return;
+            try
+            {
+                var bodyRef = simulation.Bodies.GetBodyReference(body);
+                ref var attached = ref bodyRef.Constraints;
+                if (attached.Count == 0) return;
+
+                // Snapshot first — Solver.Remove mutates the body's constraint list as we go.
+                var handles = new ConstraintHandle[attached.Count];
+                for (var i = 0; i < attached.Count; i++)
+                    handles[i] = attached[i].ConnectingConstraintHandle;
+
+                foreach (var h in handles)
+                {
+                    try { simulation.Solver.Remove(h); }
+                    catch (System.Exception ex)
+                    {
+                        Log.Warning(ex, $"Ragdoll: failed to remove constraint {h.Value} on body {body.Value}");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                Log.Warning(ex, $"Ragdoll: failed to enumerate constraints on body {body.Value}");
+            }
+        }
     }
 
     /// <summary>
@@ -134,7 +173,6 @@ public unsafe partial class Ragdoll
 
         internal FrozenMeshGeometryCache? GetWeaponContactMesh(nint address) => owner.GetWeaponContactMesh(address);
         internal FrozenMeshGeometryCache? CachedSurfaceFor(nint address) => owner.CachedSurfaceFor(address);
-        internal void RemoveConstraintsOnBody(BodyHandle body) => owner.RemoveConstraintsOnBody(body);
         internal Vector3 GetCharacterScale(nint address, IHostSkeleton skel) => owner.GetCharacterScale(address, skel);
 
         /// <summary>How far the render frame is between the last two physics steps (1 before the first step).</summary>
@@ -152,10 +190,5 @@ public unsafe partial class Ragdoll
         // a6-3
         /// <summary>The rig is no longer resting: keep it stepping for the settle window (the stepping loop).</summary>
         internal void BeginBiomechanicalSettle() => owner.BeginBiomechanicalSettle();
-        /// <summary>The external rigs (garments still worn) that ride along when the standing hold moves the rig, and
-        /// moving them by the rig's delta (external bodies).</summary>
-        internal void CollectCarriedExternalRigs() => owner.CollectCarriedExternalRigs();
-        internal void TranslateCarriedExternalRigs(Vector3 correction, Vector3 anchorVelocity) =>
-            owner.TranslateCarriedExternalRigs(correction, anchorVelocity);
     }
 }

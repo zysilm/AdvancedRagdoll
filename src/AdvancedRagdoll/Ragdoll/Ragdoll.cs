@@ -58,7 +58,6 @@ public unsafe partial class Ragdoll : IDisposable
     // What each pair of the ragdoll's own bodies overlapped by when it started (see the class).
     private StartOverlapAllowance? startOverlap;
     private BepuSimulation? simulation { get => ctx.Simulation; set => ctx.Simulation = value; }
-    private int externalBodyGeneration;
 
     // State
     private nint targetCharacterAddress { get => ctx.TargetCharacterAddress; set => ctx.TargetCharacterAddress = value; }
@@ -139,12 +138,6 @@ public unsafe partial class Ragdoll : IDisposable
 
     // Bone-to-body mapping
     private List<RagdollBone> ragdollBones => ctx.Bodies;
-    private readonly List<ExternalBodyHandle> externalBodies = new();
-    private readonly List<ExternalRigHandle> externalRigs = new();
-    private readonly HashSet<int> externalDynamicBodyHandles = new();
-    private readonly HashSet<int> externalRigDynamicBodyHandles = new();
-    private readonly HashSet<int> externalRigNoRagdollContactBodyHandles = new();
-    private readonly HashSet<(int, int)> externalRigConnectedPairs = new();
     private readonly HashSet<int> softKinematicBodyHandles = new();
     // Kinematic proxies driven by living NPC/player skeletons. When corpse traversal is enabled,
     // the narrow phase gives only these contacts the soft, low-friction material that prevents a
@@ -397,6 +390,9 @@ public unsafe partial class Ragdoll : IDisposable
         grab = new Grab(ctx);
         impacts = new Impacts(ctx);
         strike = new WeaponStrike(ctx);
+        // a6-5
+        external = new ExternalBodies(ctx);
+        softTissue = new SoftTissue(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
@@ -412,8 +408,6 @@ public unsafe partial class Ragdoll : IDisposable
     private readonly Dictionary<string, JointLimitStress> stressWorstByBone = new();
 
     private float traversalMassMultiplier = 1f;
-
-    private readonly List<ExternalRigHandle> carriedRigs = new();
 
     // --- Directed collapse spike (experimental proof-of-concept) ---
     // Goal: validate "foot plant + staged body drive" for a forward kneel/pitch death.

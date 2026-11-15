@@ -21,13 +21,36 @@ public unsafe partial class Ragdoll
     private List<ConstraintHandle> wristConstraints => standing.WristConstraints;
 
     private bool CreateStandingSupportCore(Vector3 anchorWorldPos, Quaternion uprightRot, string anchorBoneName)
-        => standing.Create(anchorWorldPos, uprightRot, anchorBoneName, grabSlots.Count > 0);
+    {
+        if (!standing.Create(anchorWorldPos, uprightRot, anchorBoneName, grabSlots.Count > 0))
+            return false;
+        ApplyStandingAnchorCorrection();
+        standing.LogCreated(anchorWorldPos, anchorBoneName);
+        return true;
+    }
 
     /// <summary>Swap the anchor bone/position while the support is already active, without re-waking bodies.</summary>
     private bool UpdateStandingSupportCore(Vector3 anchorWorldPos, Quaternion uprightRot, string anchorBoneName)
-        => standing.Update(anchorWorldPos, uprightRot, anchorBoneName);
+    {
+        if (!standing.Update(anchorWorldPos, uprightRot, anchorBoneName))
+            return false;
+        ApplyStandingAnchorCorrection();
+        return true;
+    }
 
-    private void ApplyStandingAnchorCorrection() => standing.ApplyAnchorCorrection();
+    /// <summary>
+    /// Keep the held point fixed. Clothes still on the corpse come with it; the hold would leave them behind on the
+    /// floor for the same reason the grab did. Decide first (a recorded decision, see
+    /// <see cref="CollectCarriedExternalRigs"/>), move second.
+    /// </summary>
+    private void ApplyStandingAnchorCorrection()
+    {
+        if (!standing.TryGetAnchorCorrection(out var correction, out var anchorVelocity))
+            return;
+        CollectCarriedExternalRigs();
+        standing.MoveRigBy(correction, anchorVelocity);
+        external.TranslateCarried(correction, anchorVelocity);
+    }
 
     private void RemoveStandingSupportCore() => standing.Remove();
 
@@ -85,10 +108,13 @@ public unsafe partial class Ragdoll
 
             BuildStandingConstraints(anchorWorldPos, uprightRot, anchorBoneName);
             standingActive = true;
-            ApplyAnchorCorrection();
-            ctx.Log.Info($"Ragdoll: Standing support created — {standingConstraints.Count} constraints, anchor={anchorBoneName} ({anchorWorldPos.X:F2},{anchorWorldPos.Y:F2},{anchorWorldPos.Z:F2})");
+            // The ragdoll then applies the anchor correction (it carries the worn external rigs along) and calls
+            // LogCreated.
             return true;
         }
+
+        internal void LogCreated(Vector3 anchorWorldPos, string anchorBoneName)
+            => ctx.Log.Info($"Ragdoll: Standing support created — {standingConstraints.Count} constraints, anchor={anchorBoneName} ({anchorWorldPos.X:F2},{anchorWorldPos.Y:F2},{anchorWorldPos.Z:F2})");
 
         /// <summary>Swap the anchor bone/position while the support is already active, without re-waking bodies.</summary>
         internal bool Update(Vector3 anchorWorldPos, Quaternion uprightRot, string anchorBoneName)
@@ -102,7 +128,7 @@ public unsafe partial class Ragdoll
             standingAnchorHandle = null;
 
             BuildStandingConstraints(anchorWorldPos, uprightRot, anchorBoneName);
-            ApplyAnchorCorrection();
+            // The ragdoll then applies the anchor correction.
             return true;
         }
 
@@ -155,20 +181,25 @@ public unsafe partial class Ragdoll
             }
         }
 
-        internal void ApplyAnchorCorrection()
+        /// <summary>How far the anchor drifted from its target, and its velocity; false while there is no hold. The
+        /// ragdoll then collects the worn external rigs, calls <see cref="MoveRigBy"/> and carries those rigs along
+        /// (<see cref="Ragdoll.ApplyStandingAnchorCorrection"/>).</summary>
+        internal bool TryGetAnchorCorrection(out Vector3 correction, out Vector3 anchorVelocity)
         {
+            correction = default;
+            anchorVelocity = default;
             var simulation = ctx.Simulation;
             if (!standingActive || simulation == null || !standingAnchorHandle.HasValue)
-                return;
+                return false;
 
             var anchor = simulation.Bodies.GetBodyReference(standingAnchorHandle.Value);
-            var correction = standingAnchorTarget - anchor.Pose.Position;
-            var anchorVelocity = anchor.Velocity.Linear;
+            correction = standingAnchorTarget - anchor.Pose.Position;
+            anchorVelocity = anchor.Velocity.Linear;
+            return true;
+        }
 
-            // Clothes still on the corpse come with it; the hold left them behind on the floor for the same
-            // reason the grab did. Decide first, move second — see CollectCarriedExternalRigs.
-            ctx.Core.CollectCarriedExternalRigs();
-
+        internal void MoveRigBy(Vector3 correction, Vector3 anchorVelocity)
+        {
             // Keep the held point fixed without disabling contact response. If collision pushes the
             // ragdoll as a whole, translate every body back by the same delta and remove the global
             // anchor velocity; relative limb motion from the contact is preserved.
@@ -179,8 +210,6 @@ public unsafe partial class Ragdoll
                 body.Velocity.Linear -= anchorVelocity;
                 body.Awake = true;
             }
-
-            ctx.Core.TranslateCarriedExternalRigs(correction, anchorVelocity);
         }
 
         internal void Remove()
