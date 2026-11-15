@@ -21,8 +21,6 @@ public unsafe partial class Ragdoll
     // (Ragdoll.Joints.cs).
     private readonly JointModel joints;
 
-    private ref Vector3 anatomicalForward => ref joints.AnatomicalForward;
-    private List<SwingStressMonitor> swingStressMonitors => joints.SwingStressMonitors;
     private Dictionary<string, (ConstraintHandle Handle, AngularMotor Original)> angularMotorByBone => joints.AngularMotorByBone;
     private Dictionary<string, (ConstraintHandle Handle, SwingLimit Original)> swingLimitByBone => joints.SwingLimitByBone;
     private List<RecoilRelax> recoilRelaxers => joints.RecoilRelaxers;
@@ -201,7 +199,6 @@ public unsafe partial class Ragdoll
         // The character's facing at activation (deaths start standing, so the root yaw is trustworthy).
         // Anatomical anchor for hinge axes that must not depend on the pose the body died in.
         private Vector3 anatomicalForward;
-        internal ref Vector3 AnatomicalForward => ref anatomicalForward;
 
         // Relaxed passive hip axial rotation. Clinical standing values are ~35°/45°
         // (int/ext); deep flexion winds the capsular ligaments and shrinks them further,
@@ -212,7 +209,6 @@ public unsafe partial class Ragdoll
 
         private readonly List<SwingStressMonitor> swingStressMonitors = new();
         private readonly Dictionary<string, JointLimitStress> stressWorstByBone = new();
-        internal List<SwingStressMonitor> SwingStressMonitors => swingStressMonitors;
 
         // Each joint's angular motor drives the parent/child relative angular velocity to zero with
         // unlimited force, and a SwingLimit caps the cone the child may swing into — together they make
@@ -1040,5 +1036,24 @@ public unsafe partial class Ragdoll
                     catch { }
             }
         }
+
+        // a6-10: what the rig build (RigBuilder) fills in, at the same points as before.
+        /// <summary>A new rig's joints: the character's facing for the anatomical frames, and no stress monitors
+        /// yet.</summary>
+        internal void BeginRig(Vector3 forward)
+        {
+            anatomicalForward = forward;
+            swingStressMonitors.Clear();
+        }
+
+        internal void AddSwingStressMonitor(SwingStressMonitor monitor) => swingStressMonitors.Add(monitor);
+
+        /// <summary>A joint's swing limit as built, for the release after a recoil or a landing.</summary>
+        internal void RecordSwingLimit(string bone, ConstraintHandle handle, SwingLimit limit)
+            => swingLimitByBone[bone] = (handle, limit);
+
+        /// <summary>A joint's motor as built, for the release after a recoil or a landing.</summary>
+        internal void RecordMotor(string bone, ConstraintHandle handle, AngularMotor motor)
+            => angularMotorByBone[bone] = (handle, motor);
     }
 }

@@ -95,10 +95,6 @@ public unsafe partial class Ragdoll
     // Squash & stretch and the soft-body leashes (Ragdoll.SoftTissue.cs).
     private readonly SoftTissue softTissue;
 
-    private SquashState[]? squashStates { get => softTissue.SquashStates; set => softTissue.SquashStates = value; }
-    private List<SoftBodyLeash> softBodyLeashes => softTissue.Leashes;
-    private int softLeashLogBudget { get => softTissue.LeashLogBudget; set => softTissue.LeashLogBudget = value; }
-
     private void UpdateSquashAndStretch(IHostSkeleton skel, float dt)
         => softTissue.UpdateSquashAndStretch(skel, dt, activeDefByName, frameCount);
 
@@ -120,10 +116,6 @@ public unsafe partial class Ragdoll
         private int softLeashLogBudget;
 
         internal SoftTissue(SimulationContext ctx) { this.ctx = ctx; }
-
-        internal SquashState[]? SquashStates { get => squashStates; set => squashStates = value; }
-        internal List<SoftBodyLeash> Leashes => softBodyLeashes;
-        internal int LeashLogBudget { get => softLeashLogBudget; set => softLeashLogBudget = value; }
 
         private const float SquashImpactDeltaV = 1.5f;   // m/s of per-frame Δv before a kick registers
         // Kick goes STRAIGHT into the compression value, not its velocity: a velocity impulse into
@@ -354,6 +346,21 @@ public unsafe partial class Ragdoll
                 ctx.Log.Warning(ex, "Ragdoll: failed to restore soft-tissue scales on deactivate");
             }
             squashStates = null;
+        }
+
+        // a6-10: what the rig build (RigBuilder) resets and fills in, at the same points as before.
+        /// <summary>A new rig: no leashes, and no squash state carried over from the previous corpse.</summary>
+        internal void BeginRig()
+        {
+            softBodyLeashes.Clear();
+            squashStates = null;
+        }
+
+        /// <summary>A soft body's leash, made when its joint is built; the leash log budget starts again.</summary>
+        internal void AddLeash(SoftBodyLeash leash)
+        {
+            softBodyLeashes.Add(leash);
+            softLeashLogBudget = 6;
         }
     }
 }

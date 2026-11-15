@@ -270,3 +270,18 @@ frame begin and end, the start and end of the rig build, and the selected NPCs (
 record gets whether the hair is animated from the hair rig, which passes its own value. The debug capsules
 (`Ragdoll.Diagnostics.cs`) read the rig and the frame cost counters are process-wide, and the replay's carried-state
 restore (`Ragdoll.Replay.cs`) writes the fields of many components, so neither belongs to the recorder; they stay.
+<!-- a6-10 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `RigBuilder` | `Ragdoll.RigBuild.cs` | the rig build of one activation: the solver budget, the simulation with its safety ground, the bone poses the rig is built in (with the handoff velocities), the bodies with their shapes, mass, inertia and starting velocity, the startup lift, each joint's own constraints with the connected pairs and the soft-tissue leashes; it owns the set of soft-tissue bodies |
+
+The rig builder is the one component that calls other components, and it is constructed with them as explicit
+dependencies: the mesh volumes and the structural fit (the shapes they make), the joint model (the anatomical additions
+to a joint, and the frames, motors, swing limits and stress monitors it records, through its own methods) and the soft
+tissue (a new rig's reset and the leashes, through its own methods). It creates bodies and constraints in exactly the
+old order. The ragdoll's `InitializePhysics` runs its steps and does everything between them that reads or records the
+host or another component's state: the skeleton read and the bone definitions, the ground ray and the terrain patches
+(recorded NPC lists and positions), the contact callbacks (they collect the tables of seven components), the mesh
+volumes and hull fits (recorded), the mesh status text, the surface cache, the torso bodies, the bone index set, the
+animation freeze, the colliders of the other characters, the hair rig and the start and end records. The handoff
+sample is activation state; the ragdoll hands it in. `CoreCalls` is unchanged.

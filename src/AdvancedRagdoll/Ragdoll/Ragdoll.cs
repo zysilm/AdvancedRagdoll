@@ -118,9 +118,6 @@ public unsafe partial class Ragdoll : IDisposable
     // Bone-to-body mapping
     private List<RagdollBone> ragdollBones => ctx.Bodies;
     private readonly HashSet<int> softKinematicBodyHandles = new();
-    // Soft-tissue (SoftBody) rig bodies — excluded from ALL contact generation (see
-    // RagdollNarrowPhaseCallbacks.SoftBodyBodies).
-    private readonly HashSet<int> softBodyBodyHandles = new();
 
     private struct NpcTraversalProxyRequest
     {
@@ -344,6 +341,8 @@ public unsafe partial class Ragdoll : IDisposable
         poseWriter = new PoseWriter(ctx);
         // a6-9
         ctx.Recorder = recorder = new Recorder(ctx);
+        // a6-10
+        rigBuilder = new RigBuilder(ctx, meshVolumes, structuralFit, joints, softTissue);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
