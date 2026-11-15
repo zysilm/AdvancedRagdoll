@@ -80,7 +80,7 @@ public unsafe partial class Ragdoll
         if (host.Build.RestoresFollowPosition)
             followWasActive = false;
         isActive = true;
-        lastFrameTimestamp = 0;
+        stepper.ResetFrameClock();
         physicsAccumulator = 0f;
         corpseTraversal.ResetForActivation();
         prevAllAsleep = false;

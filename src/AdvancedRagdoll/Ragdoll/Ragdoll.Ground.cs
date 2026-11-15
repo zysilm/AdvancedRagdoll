@@ -17,13 +17,10 @@ public unsafe partial class Ragdoll
     // The ground under the corpse (Ragdoll.Ground.cs).
     private readonly Ground ground;
 
-    private float terrainPatchRadius { get => ground.PatchRadius; set => ground.PatchRadius = value; }
-    private float terrainPatchStep { get => ground.PatchStep; set => ground.PatchStep = value; }
-    private float terrainPatchRefreshDistance { get => ground.PatchRefreshDistance; set => ground.PatchRefreshDistance = value; }
     // Ground height (physics ground may be lowered by floor offset)
-    private float groundY { get => ground.GroundY; set => ground.GroundY = value; }
+    private float groundY => ground.GroundY;
     // Real terrain ground (before floor offset), used for visual correction
-    private float realGroundY { get => ground.RealGroundY; set => ground.RealGroundY = value; }
+    private float realGroundY => ground.RealGroundY;
 
     private void AddTerrainPatch(float centerX, float centerZ, float defaultGroundY)
         => ground.AddTerrainPatch(centerX, centerZ, defaultGroundY, targetIsLocalPlayer, activeRagdollMeshVolumes);
@@ -262,5 +259,23 @@ public unsafe partial class Ragdoll
         // a6-12
         /// <summary>Deactivation: the ground patches laid so far are forgotten.</summary>
         internal void ClearPatchCenters() => PatchCenters.Clear();
+
+        /// <summary>The rig build: the physics ground height (the character's root, then the ray's hit).</summary>
+        internal void SetGroundY(float y) => GroundY = y;
+
+        /// <summary>The rig build: the real terrain level, before any offset.</summary>
+        internal void KeepRealGround() => RealGroundY = GroundY;
+
+        /// <summary>The rig build: the patches are sized to the body (the ground must reach at least twice as far as
+        /// the body does).</summary>
+        internal void SizePatches(float bodyReach)
+            => (PatchRadius, PatchRefreshDistance, PatchStep) = CollisionMeshGeometry.PatchFor(bodyReach);
+
+        /// <summary>The skeleton moved: the ground re-raycast under it (real and physics).</summary>
+        internal void SetFromRaycast(float y)
+        {
+            RealGroundY = y;
+            GroundY = RealGroundY;
+        }
     }
 }

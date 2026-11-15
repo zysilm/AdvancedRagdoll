@@ -66,7 +66,7 @@ public unsafe partial class Ragdoll
                 structuralFitTask = null;
                 if (task == null)
                 {
-                    if (ctx.Recorder.IsRecording) ctx.Recorder.FitOutcome = 1;
+                    if (ctx.Recorder.IsRecording) ctx.Recorder.NoteFitOutcome(1);
                     return NoStructuralFits;
                 }
 
@@ -75,17 +75,17 @@ public unsafe partial class Ragdoll
                 if (!scheduler.TryWait(task, 150, out var result))
                 {
                     ctx.Log.Info("Ragdoll mesh geometry: fit not ready yet; built-in volumes used for this ragdoll.");
-                    if (ctx.Recorder.IsRecording) ctx.Recorder.FitOutcome = 2;
+                    if (ctx.Recorder.IsRecording) ctx.Recorder.NoteFitOutcome(2);
                     return NoStructuralFits;
                 }
-                if (ctx.Recorder.IsRecording) ctx.Recorder.FitOutcome = 3;
+                if (ctx.Recorder.IsRecording) ctx.Recorder.NoteFitOutcome(3);
                 ctx.Log.Info($"Ragdoll mesh geometry: {result.Summary}");
                 return result.Fits;
             }
             catch (Exception ex)
             {
                 ctx.Log.Warning(ex, "Ragdoll mesh geometry: fit failed; built-in volumes used.");
-                if (ctx.Recorder.IsRecording) ctx.Recorder.FitOutcome = 4;
+                if (ctx.Recorder.IsRecording) ctx.Recorder.NoteFitOutcome(4);
                 return NoStructuralFits;
             }
         }

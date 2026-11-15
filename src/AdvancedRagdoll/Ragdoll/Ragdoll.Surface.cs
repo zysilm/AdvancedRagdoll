@@ -15,7 +15,7 @@ public unsafe partial class Ragdoll
 {
     // The final collision-proxy surface (Ragdoll.Surface.cs).
     private readonly SurfaceRuntime surfaceRuntime;
-    private CharacterSurfaceRuntime? characterSurfaceRuntime { get => surfaceRuntime.Runtime; set => surfaceRuntime.Runtime = value; }
+    private CharacterSurfaceRuntime? characterSurfaceRuntime => surfaceRuntime.Runtime;
 
     /// <summary>The resolved race/body profile used by this corpse, if it has a supported humanoid identity.</summary>
     internal string? ActiveCharacterSurfaceProfileName => characterSurfaceRuntime?.Profile.Name;

@@ -73,12 +73,7 @@ public unsafe partial class Ragdoll
     private HashSet<int> npcTraversalGhostKinematicBodyHandles => characterColliders.TraversalGhostBodyHandles;
     // Set when an NPC collider genuinely moved near the corpse this frame; consumed by the NEXT
     // frame's resting decision.
-    private bool npcColliderMovedNearCorpse
-    {
-        get => characterColliders.MovedNearCorpse;
-        set => characterColliders.MovedNearCorpse = value;
-    }
-    private ref Vector3 corpseWakeCenter => ref characterColliders.CorpseWakeCenter;
+    private bool npcColliderMovedNearCorpse => characterColliders.MovedNearCorpse;
 
     private void RefreshCorpseBounds() => characterColliders.RefreshCorpseBounds();
 
@@ -214,9 +209,9 @@ public unsafe partial class Ragdoll
                     default(BodyVelocity),
                     new CollidableDescription(shapeIndex, 0.04f),
                     new BodyActivityDescription(0.01f)));
-                npcCollisionKinematicBodyHandles.Add(bodyHandle.Value);
+                characterColliders.AddKinematicBody(bodyHandle.Value);
 
-                npcCollisionStates.Add(new NpcCollisionState
+                characterColliders.AddState(new NpcCollisionState
                 {
                     NpcAddress = address,
                     BoneStatics = new List<NpcBoneStatic>(),
@@ -291,8 +286,8 @@ public unsafe partial class Ragdoll
             default(BodyVelocity),
             new CollidableDescription(shapeIndex, 0.04f),
             new BodyActivityDescription(0.01f)));
-        npcCollisionKinematicBodyHandles.Add(handle.Value);
-        npcCollisionStates.Add(new NpcCollisionState
+        characterColliders.AddKinematicBody(handle.Value);
+        characterColliders.AddState(new NpcCollisionState
         {
             NpcAddress = address,
             BoneStatics = new List<NpcBoneStatic>(),
@@ -364,7 +359,7 @@ public unsafe partial class Ragdoll
         // ragdoll activated) — its bone capsules already track it; just mark it as the strike collider
         // so the bone/weapon strike activates. Without this, the killer's strike never fired.
         foreach (var s in npcCollisionStates)
-            if (s.NpcAddress == address) { strikeColliderAddress = address; return true; }
+            if (s.NpcAddress == address) { strike.SetColliderAddress(address); return true; }
         // Need a readable skeleton so we take the bone-capsule (or hull) path, not the fallback.
         if (skeletons.TryGetSkeleton(address) == null) return false;
 
@@ -373,7 +368,7 @@ public unsafe partial class Ragdoll
         var before = npcCollisionStates.Count;
         BuildCharacterCollision(address, "monster", scale, capsuleRadius);
         if (npcCollisionStates.Count <= before) return false;
-        strikeColliderAddress = address; // this collider's bones drive the attack strike
+        strike.SetColliderAddress(address); // this collider's bones drive the attack strike
         return true;
     }
 
@@ -396,18 +391,17 @@ public unsafe partial class Ragdoll
     /// statics far away and drops the per-frame tracking entry so a despawned actor isn't read).</summary>
     private void RemoveLiveColliderCore(nint address)
     {
-        lightweightNpcCollisionAddresses.Remove(address);
+        characterColliders.RemoveLightweight(address);
         SetLiveColliderTraversalGhost(address, false);
         ClearNpcTraversalSupport(address);
         if (simulation == null) return;
-        if (strikeColliderAddress == address) strikeColliderAddress = nint.Zero;
-        strikeColliderAddresses.Remove(address);
+        strike.RemoveColliderAddress(address);
         for (int i = npcCollisionStates.Count - 1; i >= 0; i--)
         {
             if (npcCollisionStates[i].NpcAddress != address) continue;
             var npcState = npcCollisionStates[i];
             ParkNpcStatics(ref npcState, new Vector3(0, -9999, 0));
-            npcCollisionStates.RemoveAt(i);
+            characterColliders.RemoveStateAt(i);
         }
     }
 
@@ -453,7 +447,7 @@ public unsafe partial class Ragdoll
         // is fine — stepping resumes before the contact needs solving).
         private bool npcColliderMovedNearCorpse;
         // Rough corpse centre for the collider proximity gate (the stepping loop sets it).
-        internal Vector3 CorpseWakeCenter;
+        private Vector3 corpseWakeCenter;
 
         // World bounds of this corpse's own bodies, refreshed once per frame before colliders move.
         private Vector3 corpseBoundsMin;
@@ -464,7 +458,19 @@ public unsafe partial class Ragdoll
         internal HashSet<nint> LightweightAddresses => lightweightNpcCollisionAddresses;
         internal HashSet<int> KinematicBodyHandles => npcCollisionKinematicBodyHandles;
         internal HashSet<int> TraversalGhostBodyHandles => npcTraversalGhostKinematicBodyHandles;
-        internal bool MovedNearCorpse { get => npcColliderMovedNearCorpse; set => npcColliderMovedNearCorpse = value; }
+        internal bool MovedNearCorpse => npcColliderMovedNearCorpse;
+
+        /// <summary>A new collider: its kinematic body (the narrow phase's soft NPC material), then its state.</summary>
+        internal void AddKinematicBody(int bodyHandle) => npcCollisionKinematicBodyHandles.Add(bodyHandle);
+        internal void AddState(NpcCollisionState state) => npcCollisionStates.Add(state);
+        /// <summary>The tracking loop writes a collider's state back.</summary>
+        internal void SetState(int index, NpcCollisionState state) => npcCollisionStates[index] = state;
+        internal void RemoveStateAt(int index) => npcCollisionStates.RemoveAt(index);
+        internal void RemoveLightweight(nint address) => lightweightNpcCollisionAddresses.Remove(address);
+        /// <summary>The stepping loop's rough corpse centre for the proximity gate.</summary>
+        internal void SetWakeCenter(Vector3 center) => corpseWakeCenter = center;
+        /// <summary>This frame's resting decision has read it; this frame's collider updates re-arm it.</summary>
+        internal void ClearMovedNearCorpse() => npcColliderMovedNearCorpse = false;
 
         internal void RefreshCorpseBounds()
         {
@@ -855,7 +861,7 @@ public unsafe partial class Ragdoll
 
         private void NoteNpcColliderMoved(Vector3 colliderPos)
         {
-            if (Vector3.DistanceSquared(colliderPos, CorpseWakeCenter) < NpcColliderWakeRadiusSq)
+            if (Vector3.DistanceSquared(colliderPos, corpseWakeCenter) < NpcColliderWakeRadiusSq)
                 npcColliderMovedNearCorpse = true;
         }
 

@@ -33,8 +33,9 @@ public unsafe partial class Ragdoll : IDisposable
     // Everything the controller asks of the game goes through these host services (Hosting/; docs/ARCHITECTURE.md
     // §2).
     private readonly RagdollHostServices host;
-    // The state shared with the components (SimulationContext.cs). The fields that moved there are reached through
-    // the forwarding properties below under their old names, until the code using them is split into components too.
+    // The state shared with the components (SimulationContext.cs). The ragdoll's own code (the recorded layer, the
+    // activation flow, the step sequence) reaches the context's fields through the forwarding properties below, under
+    // their old names.
     private readonly SimulationContext ctx;
     private IHostSkeletonSource skeletons => ctx.Skeletons;
     // The character models: every mesh the controller uses comes from here, as a finished product.
@@ -96,13 +97,6 @@ public unsafe partial class Ragdoll : IDisposable
     // bones), and the restore must run on that path too or the character stays frozen forever.
     private bool animationFrozen;
 
-    // Frame-rate-independent physics timing. The render hook fires once per rendered
-    // frame at whatever framerate the game runs (30/60/120/144…). Stepping a fixed
-    // 1/60 every call made the ragdoll run in slow-motion below 60fps and fast above it.
-    // We measure real wall-clock dt and advance the simulation in fixed-size substeps.
-    private const int MaxSubstepsPerFrame = 4;  // cap catch-up to avoid a spiral of death
-    private const float SlowFrameSeconds = 1f / 30f; // slower than this, one substep a frame
-    private const float MaxFrameDelta = 0.1f;   // ignore huge gaps (loading screens, hitches)
     private const float BiomechanicalSettleDuration = 1.25f;
     private const float RagdollSleepThreshold = 0.03f;
 
@@ -111,7 +105,7 @@ public unsafe partial class Ragdoll : IDisposable
     private ref Vector3 skelWorldPos => ref ctx.RootPosition;
     private ref Quaternion skelWorldRot => ref ctx.RootRotation;
     private ref Quaternion skelWorldRotInv => ref ctx.RootRotationInverse;
-    private Vector3 skelWorldScale { get => ctx.RootScale; set => ctx.RootScale = value; }
+    private ref Vector3 skelWorldScale => ref ctx.RootScale;
 
     // Bone-to-body mapping
     private List<RagdollBone> ragdollBones => ctx.Bodies;
@@ -163,17 +157,13 @@ public unsafe partial class Ragdoll : IDisposable
     private static RagdollBoneConfig[]? allBoneDefaults;
     private static RagdollBoneDef[]? defaultBoneDefs;
 
-    // This ragdoll's profile and the bone configurations built from it.
+    // This ragdoll's profile.
     private SkeletonProfile skeletonProfile => ctx.Profile;
-    private RagdollBoneConfig[] boneDefaults => ctx.BoneDefaults;
-    // a6-3
     private bool isActive { get => ctx.IsActive; set => ctx.IsActive = value; }
     /// <summary>What the rig actually weighs, summed at InitializePhysics.</summary>
     private float ragdollTotalMass { get => ctx.TotalMass; set => ctx.TotalMass = value; }
-    // a6-4
     // True once BEPU has put the complete ragdoll constraint island to sleep (SimulationContext.PrevAllAsleep).
     private bool prevAllAsleep { get => ctx.PrevAllAsleep; set => ctx.PrevAllAsleep = value; }
-    // a6-6
     private bool physicsStarted { get => ctx.PhysicsStarted; set => ctx.PhysicsStarted = value; }
     // Short post-wake window that keeps the island awake (SimulationContext.BiomechanicalSettleRemaining).
     private float biomechanicalSettleRemaining
@@ -181,10 +171,8 @@ public unsafe partial class Ragdoll : IDisposable
         get => ctx.BiomechanicalSettleRemaining;
         set => ctx.BiomechanicalSettleRemaining = value;
     }
-    // a6-7
     // EntityId captured at Activate (SimulationContext.TargetEntityId).
     private uint targetEntityId { get => ctx.TargetEntityId; set => ctx.TargetEntityId = value; }
-    // a6-11
     // The fixed-step accumulator and the render interpolation flag (SimulationContext; the stepping loop's rules are
     // the Stepper's). Render interpolation: physics advances in fixed 60Hz ticks but we render every frame
     // (often >60fps). Without interpolation the ragdoll shows the same pose for several
@@ -241,7 +229,6 @@ public unsafe partial class Ragdoll : IDisposable
     // Water under the corpse (Ragdoll.Water.cs).
     private readonly Water water;
 
-
     // Animation freeze state
     private float savedOverallSpeed = 1.0f;
 
@@ -263,7 +250,6 @@ public unsafe partial class Ragdoll : IDisposable
             Label = label;
         }
     }
-
 
     /// <summary>True from <see cref="Activate(in RagdollActivation)"/> until <see cref="Deactivate"/> (or until the ragdoll
     /// deactivates itself because its character is gone).</summary>
@@ -309,45 +295,37 @@ public unsafe partial class Ragdoll : IDisposable
         random = new RecordingRandom(host.Random, () => rec);
         scheduler = host.Scheduler;
         settingsSource = host.Settings;
-        ctx = new SimulationContext(new CoreCalls(this), profile, profileBoneDefaults, hostSkeletons, recordedWorld,
-            recordedMeshes, hostActors, recordedClock, host.Log);
+        ctx = new SimulationContext(profile, profileBoneDefaults, hostSkeletons, recordedWorld, recordedMeshes,
+            hostActors, recordedClock, host.Log);
+        // The components (docs/ARCHITECTURE.md §8). Their constructors only keep what they are handed, so the order
+        // matters only where one component is handed another: the skeleton reader before the mesh volumes, the mesh
+        // volumes before the hair rig and the rig builder.
         water = new Water(ctx);
         weaponContact = new WeaponContactSurfaces(ctx);
-        hairRig = new HairRig(ctx);
-        // a6-2
-        meshVolumes = new MeshVolumes(ctx);
+        skeletonReader = new SkeletonReader(ctx);
+        meshVolumes = new MeshVolumes(ctx, skeletonReader);
+        hairRig = new HairRig(ctx, meshVolumes);
         structuralFit = new StructuralFit(ctx);
         surfaceRuntime = new SurfaceRuntime(ctx);
-        // a6-3
         ground = new Ground(ctx);
         standing = new StandingSupport(ctx);
         grab = new Grab(ctx);
         impacts = new Impacts(ctx);
         strike = new WeaponStrike(ctx);
-        // a6-4
         knee = new KneePowerLoss(ctx);
         collapse = new GuidedCollapse(ctx, random);
-        // a6-5
         external = new ExternalBodies(ctx);
         softTissue = new SoftTissue(ctx);
-        // a6-6
         characterColliders = new CharacterColliders(ctx);
         corpseTraversal = new CorpseTraversal(ctx);
-        // a6-7
         joints = new JointModel(ctx);
-        // a6-8
-        skeletonReader = new SkeletonReader(ctx);
         poseWriter = new PoseWriter(ctx);
-        // a6-9
         ctx.Recorder = recorder = new Recorder(ctx);
-        // a6-10
         rigBuilder = new RigBuilder(ctx, meshVolumes, structuralFit, joints, softTissue);
-        // a6-11
         stepper = new Stepper(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
-
 
     // The guided-collapse profiles this ragdoll may play (the directed collapse, Ragdoll.GuidedCollapse.cs).
     private readonly ICollapseProfileSource collapseProfileBook;

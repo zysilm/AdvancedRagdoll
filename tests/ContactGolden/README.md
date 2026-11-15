@@ -22,10 +22,13 @@ The harness calls only internal members that existed before those stages (the re
 `Ragdoll.Recording.cs`, `GrabRigid`, `CarryExternalRigOnAnchor`, `HardLanding`, `TryGetExternalBodyPose`,
 `TryGetExternalRigBodyPose`, `TryResolveGrabAttachment`, `GetSimulatedBoneNames`, `NearestBodyDistance`,
 `IsStandingSupportActive`, `IsSimulationReady`, `GetBodyWorldPosition`). It reads the simulation through the private
-`simulation` property, and a few private members by name (a field before stage A6-2, a field or a forwarding property
-after it; the names did not change): the impact timers and descent speed, the impact jitter state, the strike window,
-the grab slots and the parked grabber, the recoil relaxers, the standing and wrist constraints, the carried rigs, the
-external bodies and rigs, the settle timer. So the same harness runs on both versions.
+`simulation` property, and a few private members: the impact timers and descent speed, the impact jitter state, the
+strike window, the grab slots and the parked grabber, the recoil relaxers, the standing and wrist constraints, the
+carried rigs, the external bodies and rigs, the settle timer and the resting flag. The output prints each under the
+name of the ragdoll's field before stage A6-2; the harness reads it where it lives since the split (a member of a
+component, or of the shared context, under the ragdoll's private field of that component, for example
+`impacts.FreezeRemaining`), and from the ragdoll's field of that name on a library without that field (before stage
+A6-2). So the same harness runs on both versions.
 
 ## The strike window is forced
 

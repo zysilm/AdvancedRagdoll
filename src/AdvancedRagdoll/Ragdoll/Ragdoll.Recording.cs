@@ -34,10 +34,10 @@ public unsafe partial class Ragdoll
 {
     // a6-9: the recording session (Recorder, below).
     private readonly Recorder recorder;
-    // The recording session's state, under its old names, for the code that is not split yet (and the recording
+    // The recording session's state, under its old names, for the ragdoll's recorded layer (and the recording
     // decorators made in the constructor).
     private RagdollRecordingWriter? rec => recorder.Writer;
-    private int recDepth { get => recorder.Depth; set => recorder.Depth = value; }
+    private int recDepth => recorder.Depth;
     private Dictionary<object, int> recMeshCaches => recorder.MeshCaches;
 
     /// <summary>
@@ -64,7 +64,9 @@ public unsafe partial class Ragdoll
         internal int PhysicsFrame;
         internal int Tick;
         /// <summary>The recorded outcome of the structural fit (1 none, 2 not ready, 3 fitted, 4 failed).</summary>
-        internal int FitOutcome;
+        internal int FitOutcome { get; private set; }
+        /// <summary>The structural fit outcome of this rig build (0 at its start).</summary>
+        internal void NoteFitOutcome(int outcome) => FitOutcome = outcome;
         private bool faultLogged;
         // One watch per entry of ConfigNames. The bound getters are shared by every controller (built with
         // the first recording); each recorded activation gets its own copies, which remember what it last saw.
@@ -227,6 +229,9 @@ public unsafe partial class Ragdoll
             catch { /* never let the recorder disturb the frame */ }
             return true;
         }
+
+        /// <summary>A recorded call (or a frame) starts: what it does is nested in it.</summary>
+        internal void Enter() => Depth++;
 
         internal void Leave()
         {
@@ -1071,6 +1076,7 @@ public unsafe partial class Ragdoll
     private void RecEndActivation(string reason) => recorder.EndActivation(reason);
     private void RecFault(Exception ex) => recorder.Fault(ex);
     private bool RecAbortPartial() => recorder.AbortPartial();
+    private void RecEnter() => recorder.Enter();
     private void RecLeave() => recorder.Leave();
 
     /// <summary>Once per rendered frame (the plugin subscribes it to the render hook): steps the ragdoll and writes the pose.</summary>
@@ -1081,7 +1087,7 @@ public unsafe partial class Ragdoll
             OnRenderFrameCore();
             return;
         }
-        recDepth++;
+        RecEnter();
         try { OnRenderFrameCore(); }
         finally { RecLeave(); }
     }
@@ -1203,7 +1209,7 @@ public unsafe partial class Ragdoll
         if (w == null) return;
         try
         {
-            recorder.FitOutcome = 0;
+            recorder.NoteFitOutcome(0);
             var count = handoffSampleValid && handoffPrevPos != null && handoffPrevRot != null
                 ? Math.Min(handoffPrevCount, Math.Min(handoffPrevPos.Length, handoffPrevRot.Length))
                 : 0;
@@ -1299,7 +1305,7 @@ public unsafe partial class Ragdoll
         {
             RecParts(w, parts); w.F32(mass); w.V3(position); w.Quat(orientation); w.V3(linearVelocity); w.V3(angularVelocity);
         }
-        recDepth++;
+        RecEnter();
         try
         {
             var ok = TryCreateExternalDynamicBodyCore(parts, mass, position, orientation, linearVelocity, angularVelocity, out handle);
@@ -1342,7 +1348,7 @@ public unsafe partial class Ragdoll
             }
         }
         catch (Exception ex) when (RecAbortPartial()) { RecFault(ex); }
-        recDepth++;
+        RecEnter();
         try
         {
             var ok = TryCreateExternalRigCore(bodySpecs!, jointSpecs!, out handle, collideWithRagdoll);
@@ -1358,7 +1364,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TrySetExternalBodyShapeCore(handle, parts, mass);
         using (RecCall(w, nameof(TrySetExternalBodyShape))) { RecBody(w, handle); RecParts(w, parts); w.F32(mass); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(TrySetExternalBodyShape), TrySetExternalBodyShapeCore(handle, parts, mass)); }
         finally { RecLeave(); }
     }
@@ -1372,7 +1378,7 @@ public unsafe partial class Ragdoll
         {
             RecRig(w, handle); w.I32(bodyIndex); w.V3(position); w.Quat(orientation); w.V3(linearVelocity); w.V3(angularVelocity);
         }
-        recDepth++;
+        RecEnter();
         try
         {
             return RecReturn(w, nameof(TrySetExternalRigBodyPose),
@@ -1386,7 +1392,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return SetExternalRigBodyRagdollContactCore(handle, bodyIndex, collide);
         using (RecCall(w, nameof(SetExternalRigBodyRagdollContact))) { RecRig(w, handle); w.I32(bodyIndex); w.Bool(collide); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(SetExternalRigBodyRagdollContact), SetExternalRigBodyRagdollContactCore(handle, bodyIndex, collide)); }
         finally { RecLeave(); }
     }
@@ -1397,7 +1403,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TrySetExternalRigBodyShapeCore(handle, bodyIndex, parts, mass);
         using (RecCall(w, nameof(TrySetExternalRigBodyShape))) { RecRig(w, handle); w.I32(bodyIndex); RecParts(w, parts); w.F32(mass); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(TrySetExternalRigBodyShape), TrySetExternalRigBodyShapeCore(handle, bodyIndex, parts, mass)); }
         finally { RecLeave(); }
     }
@@ -1407,7 +1413,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TryApplyExternalRigVelocityDeltaCore(handle, velocityDelta);
         using (RecCall(w, nameof(TryApplyExternalRigVelocityDelta))) { RecRig(w, handle); w.V3(velocityDelta); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(TryApplyExternalRigVelocityDelta), TryApplyExternalRigVelocityDeltaCore(handle, velocityDelta)); }
         finally { RecLeave(); }
     }
@@ -1418,7 +1424,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TryDampenExternalRigVelocityCore(handle, horizontalScale, verticalScale, angularScale);
         using (RecCall(w, nameof(TryDampenExternalRigVelocity))) { RecRig(w, handle); w.F32(horizontalScale); w.F32(verticalScale); w.F32(angularScale); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(TryDampenExternalRigVelocity), TryDampenExternalRigVelocityCore(handle, horizontalScale, verticalScale, angularScale)); }
         finally { RecLeave(); }
     }
@@ -1428,7 +1434,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return RelaxExternalRigSwingLimitsCore(handle, factor);
         using (RecCall(w, nameof(RelaxExternalRigSwingLimits))) { RecRig(w, handle); w.F32(factor); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(RelaxExternalRigSwingLimits), RelaxExternalRigSwingLimitsCore(handle, factor)); }
         finally { RecLeave(); }
     }
@@ -1438,7 +1444,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return ApplyExternalRigPoseGuidanceCore(handle, strength);
         using (RecCall(w, nameof(ApplyExternalRigPoseGuidance))) { RecRig(w, handle); w.F32(strength); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(ApplyExternalRigPoseGuidance), ApplyExternalRigPoseGuidanceCore(handle, strength)); }
         finally { RecLeave(); }
     }
@@ -1448,7 +1454,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TrySetExternalBodyRotationCore(handle, orientation, angularVelocityScale);
         using (RecCall(w, nameof(TrySetExternalBodyRotation))) { RecBody(w, handle); w.Quat(orientation); w.F32(angularVelocityScale); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(TrySetExternalBodyRotation), TrySetExternalBodyRotationCore(handle, orientation, angularVelocityScale)); }
         finally { RecLeave(); }
     }
@@ -1458,7 +1464,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TryApplyExternalVelocityDeltaCore(handle, velocityDelta);
         using (RecCall(w, nameof(TryApplyExternalVelocityDelta))) { RecBody(w, handle); w.V3(velocityDelta); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(TryApplyExternalVelocityDelta), TryApplyExternalVelocityDeltaCore(handle, velocityDelta)); }
         finally { RecLeave(); }
     }
@@ -1469,7 +1475,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TryDampenExternalBodyVelocityCore(handle, horizontalScale, verticalScale, angularScale);
         using (RecCall(w, nameof(TryDampenExternalBodyVelocity))) { RecBody(w, handle); w.F32(horizontalScale); w.F32(verticalScale); w.F32(angularScale); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(TryDampenExternalBodyVelocity), TryDampenExternalBodyVelocityCore(handle, horizontalScale, verticalScale, angularScale)); }
         finally { RecLeave(); }
     }
@@ -1479,7 +1485,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RemoveExternalBodyCore(handle); return; }
         using (RecCall(w, nameof(RemoveExternalBody))) RecBody(w, handle);
-        recDepth++;
+        RecEnter();
         try { RemoveExternalBodyCore(handle); }
         finally { RecLeave(); }
     }
@@ -1489,7 +1495,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RemoveExternalRigCore(handle); return; }
         using (RecCall(w, nameof(RemoveExternalRig))) RecRig(w, handle);
-        recDepth++;
+        RecEnter();
         try { RemoveExternalRigCore(handle); }
         finally { RecLeave(); }
     }
@@ -1503,7 +1509,7 @@ public unsafe partial class Ragdoll
         // The items are noted as the core takes them, so this is the one call whose record is written
         // after the call ran. It makes no other record, so nothing can come between the two.
         var seen = new List<string?>();
-        recDepth++;
+        RecEnter();
         try { SetDismemberedBonesCore(bones == null ? null! : RecTee(bones, seen)); }
         finally
         {
@@ -1534,7 +1540,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { DeactivateCore(); return; }
         using (RecCall(w, nameof(Deactivate))) { }
-        recDepth++;
+        RecEnter();
         try { DeactivateCore(); }
         finally
         {
@@ -1548,7 +1554,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { SetTraversalMassMultiplierCore(multiplier); return; }
         using (RecCall(w, nameof(SetTraversalMassMultiplier))) w.F32(multiplier);
-        recDepth++;
+        RecEnter();
         try { SetTraversalMassMultiplierCore(multiplier); }
         finally { RecLeave(); }
     }
@@ -1562,7 +1568,7 @@ public unsafe partial class Ragdoll
             w.Str(boneName); w.V3(initialTarget); w.U64((ulong)grabbingNpcAddress); w.F32(maxForce); w.F32(maxSpeed); w.F32(springFreq);
             w.Bool(GrabRigid); // read by the call, set through the property
         }
-        recDepth++;
+        RecEnter();
         try
         {
             var slot = CreateGrabConstraintCore(boneName, initialTarget, grabbingNpcAddress, maxForce, maxSpeed, springFreq);
@@ -1586,7 +1592,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return TryResolveGrabAttachmentCore(boneName, out body, out localOffset);
         using (RecCall(w, nameof(TryResolveGrabAttachment))) w.Str(boneName);
-        recDepth++;
+        RecEnter();
         try
         {
             var ok = TryResolveGrabAttachmentCore(boneName, out body, out localOffset);
@@ -1601,7 +1607,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { SetGrabTuningCore(slotId, maxForce, maxSpeed, springFreq); return; }
         using (RecCall(w, nameof(SetGrabTuning))) { w.I32(slotId); w.F32(maxForce); w.F32(maxSpeed); w.F32(springFreq); }
-        recDepth++;
+        RecEnter();
         try { SetGrabTuningCore(slotId, maxForce, maxSpeed, springFreq); }
         finally { RecLeave(); }
     }
@@ -1611,7 +1617,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { UpdateGrabTargetCore(slotId, worldTarget); return; }
         using (RecCall(w, nameof(UpdateGrabTarget))) { w.I32(slotId); w.V3(worldTarget); }
-        recDepth++;
+        RecEnter();
         try { UpdateGrabTargetCore(slotId, worldTarget); }
         finally { RecLeave(); }
     }
@@ -1621,7 +1627,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RemoveGrabConstraintCore(slotId); return; }
         using (RecCall(w, nameof(RemoveGrabConstraint))) w.I32(slotId);
-        recDepth++;
+        RecEnter();
         try { RemoveGrabConstraintCore(slotId); }
         finally { RecLeave(); }
     }
@@ -1635,7 +1641,7 @@ public unsafe partial class Ragdoll
         {
             w.F32(duration); w.F32(footForce); w.F32(pelvisForce); w.F32(drop); w.F32(forward); w.F32(pitchDegrees);
         }
-        recDepth++;
+        RecEnter();
         try { RequestDirectedKneelPitchOnReadyCore(duration, footForce, pelvisForce, drop, forward, pitchDegrees); }
         finally { RecLeave(); }
     }
@@ -1645,7 +1651,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RequestProfileDirectedCollapseOnReadyCore(profileId); return; }
         using (RecCall(w, nameof(RequestProfileDirectedCollapseOnReady))) w.Str(profileId);
-        recDepth++;
+        RecEnter();
         try { RequestProfileDirectedCollapseOnReadyCore(profileId); }
         finally { RecLeave(); }
     }
@@ -1655,7 +1661,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return BeginProfileDirectedCollapseSpikeCore(profileId);
         using (RecCall(w, nameof(BeginProfileDirectedCollapseSpike))) w.Str(profileId);
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(BeginProfileDirectedCollapseSpike), BeginProfileDirectedCollapseSpikeCore(profileId)); }
         finally { RecLeave(); }
     }
@@ -1669,7 +1675,7 @@ public unsafe partial class Ragdoll
         {
             w.F32(duration); w.F32(footForce); w.F32(pelvisForce); w.F32(drop); w.F32(forward); w.F32(pitchDegrees);
         }
-        recDepth++;
+        RecEnter();
         try
         {
             return RecReturn(w, nameof(BeginDirectedKneelPitchSpike),
@@ -1683,7 +1689,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { StopDirectedCollapseSpikeCore(); return; }
         using (RecCall(w, nameof(StopDirectedCollapseSpike))) { }
-        recDepth++;
+        RecEnter();
         try { StopDirectedCollapseSpikeCore(); }
         finally { RecLeave(); }
     }
@@ -1693,7 +1699,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RequestEntryConditionedKneePowerLossOnReadyCore(); return; }
         using (RecCall(w, nameof(RequestEntryConditionedKneePowerLossOnReady))) { }
-        recDepth++;
+        RecEnter();
         try { RequestEntryConditionedKneePowerLossOnReadyCore(); }
         finally { RecLeave(); }
     }
@@ -1703,7 +1709,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RequestKneePowerLossForwardOnReadyCore(); return; }
         using (RecCall(w, nameof(RequestKneePowerLossForwardOnReady))) { }
-        recDepth++;
+        RecEnter();
         try { RequestKneePowerLossForwardOnReadyCore(); }
         finally { RecLeave(); }
     }
@@ -1713,7 +1719,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return BeginKneePowerLossForwardPatternCore();
         using (RecCall(w, nameof(BeginKneePowerLossForwardPattern))) { }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(BeginKneePowerLossForwardPattern), BeginKneePowerLossForwardPatternCore()); }
         finally { RecLeave(); }
     }
@@ -1723,7 +1729,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { StopKneePowerLossPatternCore(); return; }
         using (RecCall(w, nameof(StopKneePowerLossPattern))) { }
-        recDepth++;
+        RecEnter();
         try { StopKneePowerLossPatternCore(); }
         finally { RecLeave(); }
     }
@@ -1735,7 +1741,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return CreateStandingSupportCore(anchorWorldPos, uprightRot, anchorBoneName);
         using (RecCall(w, nameof(CreateStandingSupport))) { w.V3(anchorWorldPos); w.Quat(uprightRot); w.Str(anchorBoneName); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(CreateStandingSupport), CreateStandingSupportCore(anchorWorldPos, uprightRot, anchorBoneName)); }
         finally { RecLeave(); }
     }
@@ -1747,7 +1753,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return UpdateStandingSupportCore(anchorWorldPos, uprightRot, anchorBoneName);
         using (RecCall(w, nameof(UpdateStandingSupport))) { w.V3(anchorWorldPos); w.Quat(uprightRot); w.Str(anchorBoneName); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(UpdateStandingSupport), UpdateStandingSupportCore(anchorWorldPos, uprightRot, anchorBoneName)); }
         finally { RecLeave(); }
     }
@@ -1757,7 +1763,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RemoveStandingSupportCore(); return; }
         using (RecCall(w, nameof(RemoveStandingSupport))) { }
-        recDepth++;
+        RecEnter();
         try { RemoveStandingSupportCore(); }
         finally { RecLeave(); }
     }
@@ -1768,7 +1774,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return CreateWristConstraintsCore(leftTarget, rightTarget, force, freq);
         using (RecCall(w, nameof(CreateWristConstraints))) { w.V3(leftTarget); w.V3(rightTarget); w.F32(force); w.F32(freq); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(CreateWristConstraints), CreateWristConstraintsCore(leftTarget, rightTarget, force, freq)); }
         finally { RecLeave(); }
     }
@@ -1778,7 +1784,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return UpdateWristConstraintsCore(leftTarget, rightTarget);
         using (RecCall(w, nameof(UpdateWristConstraints))) { w.V3(leftTarget); w.V3(rightTarget); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(UpdateWristConstraints), UpdateWristConstraintsCore(leftTarget, rightTarget)); }
         finally { RecLeave(); }
     }
@@ -1788,7 +1794,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RemoveWristConstraintsCore(); return; }
         using (RecCall(w, nameof(RemoveWristConstraints))) { }
-        recDepth++;
+        RecEnter();
         try { RemoveWristConstraintsCore(); }
         finally { RecLeave(); }
     }
@@ -1798,7 +1804,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { ApplyImpulseCore(boneName, velocityDelta); return; }
         using (RecCall(w, nameof(ApplyImpulse))) { w.Str(boneName); w.V3(velocityDelta); }
-        recDepth++;
+        RecEnter();
         try { ApplyImpulseCore(boneName, velocityDelta); }
         finally { RecLeave(); }
     }
@@ -1808,7 +1814,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { ApplyAngularVelocityCore(boneName, angularVelocityDelta); return; }
         using (RecCall(w, nameof(ApplyAngularVelocity))) { w.Str(boneName); w.V3(angularVelocityDelta); }
-        recDepth++;
+        RecEnter();
         try { ApplyAngularVelocityCore(boneName, angularVelocityDelta); }
         finally { RecLeave(); }
     }
@@ -1818,7 +1824,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return PuntNearestCore(from, maxDist, strength, upBias);
         using (RecCall(w, nameof(PuntNearest))) { w.V3(from); w.F32(maxDist); w.F32(strength); w.F32(upBias); }
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(PuntNearest), PuntNearestCore(from, maxDist, strength, upBias)); }
         finally { RecLeave(); }
     }
@@ -1828,7 +1834,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { ClearNpcTraversalSupportCore(npcAddress); return; }
         using (RecCall(w, nameof(ClearNpcTraversalSupport))) w.U64((ulong)npcAddress);
-        recDepth++;
+        RecEnter();
         try { ClearNpcTraversalSupportCore(npcAddress); }
         finally { RecLeave(); }
     }
@@ -1848,7 +1854,7 @@ public unsafe partial class Ragdoll
         {
             w.U64((ulong)npcAddress); w.V3(proposedRootPosition); w.F32(terrainY); w.F32(maxClimb); w.I32(preferredCorpseBodyHandle);
         }
-        recDepth++;
+        RecEnter();
         try
         {
             var ok = TryGetNpcTraversalRootHeightCore(npcAddress, proposedRootPosition, terrainY, maxClimb, out rootY, preferredCorpseBodyHandle);
@@ -1882,7 +1888,7 @@ public unsafe partial class Ragdoll
             w.U64((ulong)address); w.V3(initialRoot); w.V3(targetRoot); w.F32(floorY); w.F32(visualScale); w.F32(moveSpeed);
             w.F32(maxClimb); w.F32(stompResponse); w.I32(concurrentStompers); w.Bool(locomoting);
         }
-        recDepth++;
+        RecEnter();
         try
         {
             DriveNpcTraversalProxyCore(address, initialRoot, targetRoot, floorY, visualScale, moveSpeed, maxClimb,
@@ -1896,7 +1902,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { ReleaseNpcTraversalProxyCore(address); return; }
         using (RecCall(w, nameof(ReleaseNpcTraversalProxy))) w.U64((ulong)address);
-        recDepth++;
+        RecEnter();
         try { ReleaseNpcTraversalProxyCore(address); }
         finally { RecLeave(); }
     }
@@ -1906,7 +1912,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return AddLiveColliderCore(address);
         using (RecCall(w, nameof(AddLiveCollider))) w.U64((ulong)address);
-        recDepth++;
+        RecEnter();
         try { return RecReturn(w, nameof(AddLiveCollider), AddLiveColliderCore(address)); }
         finally { RecLeave(); }
     }
@@ -1916,7 +1922,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { SetLiveColliderLightweightCore(address, lightweight); return; }
         using (RecCall(w, nameof(SetLiveColliderLightweight))) { w.U64((ulong)address); w.Bool(lightweight); }
-        recDepth++;
+        RecEnter();
         try { SetLiveColliderLightweightCore(address, lightweight); }
         finally { RecLeave(); }
     }
@@ -1926,7 +1932,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { SetLiveColliderTraversalGhostCore(address, ghost); return; }
         using (RecCall(w, nameof(SetLiveColliderTraversalGhost))) { w.U64((ulong)address); w.Bool(ghost); }
-        recDepth++;
+        RecEnter();
         try { SetLiveColliderTraversalGhostCore(address, ghost); }
         finally { RecLeave(); }
     }
@@ -1936,7 +1942,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { RemoveLiveColliderCore(address); return; }
         using (RecCall(w, nameof(RemoveLiveCollider))) w.U64((ulong)address);
-        recDepth++;
+        RecEnter();
         try { RemoveLiveColliderCore(address); }
         finally { RecLeave(); }
     }
@@ -1946,7 +1952,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { CancelAttackStrikeCore(); return; }
         using (RecCall(w, nameof(CancelAttackStrike))) { }
-        recDepth++;
+        RecEnter();
         try { CancelAttackStrikeCore(); }
         finally { RecLeave(); }
     }
@@ -1956,7 +1962,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { ApplyShakeCore(intensity); return; }
         using (RecCall(w, nameof(ApplyShake))) w.F32(intensity);
-        recDepth++;
+        RecEnter();
         try { ApplyShakeCore(intensity); }
         finally { RecLeave(); }
     }
@@ -1964,10 +1970,10 @@ public unsafe partial class Ragdoll
     internal void AttachWeaponContactBody(BodyHandle weapon)
     {
         var w = rec;
-        if (w == null) { weaponContact.Attach(weapon); return; }
+        if (w == null) { AttachWeaponContactBodyCore(weapon); return; }
         using (RecCall(w, nameof(AttachWeaponContactBody))) w.I32(weapon.Value);
-        recDepth++;
-        try { weaponContact.Attach(weapon); }
+        RecEnter();
+        try { AttachWeaponContactBodyCore(weapon); }
         finally { RecLeave(); }
     }
 
@@ -1976,7 +1982,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) { weaponContact.Detach(weapon); return; }
         using (RecCall(w, nameof(DetachWeaponContactBody))) w.I32(weapon.Value);
-        recDepth++;
+        RecEnter();
         try { weaponContact.Detach(weapon); }
         finally { RecLeave(); }
     }
@@ -1988,7 +1994,7 @@ public unsafe partial class Ragdoll
         var w = rec;
         if (w == null) return meshVolumes.GetWeaponContactMesh(address);
         using (RecCall(w, nameof(GetWeaponContactMesh))) w.U64((ulong)address);
-        recDepth++;
+        RecEnter();
         try
         {
             var cache = meshVolumes.GetWeaponContactMesh(address);

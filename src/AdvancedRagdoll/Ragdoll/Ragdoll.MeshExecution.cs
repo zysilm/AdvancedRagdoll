@@ -7,8 +7,6 @@ namespace AdvancedRagdoll;
 
 public unsafe partial class Ragdoll
 {
-    private long meshCollisionTicks { get => meshVolumes.meshCollisionTicks; set => meshVolumes.meshCollisionTicks = value; }
-    private long meshSolveTicks { get => meshVolumes.meshSolveTicks; set => meshVolumes.meshSolveTicks = value; }
 
     /// <summary>Workers finish before skin refit, native bone writeback or game access.</summary>
     private void StepPhysicsSimulation(float timestep)
@@ -23,7 +21,14 @@ public unsafe partial class Ragdoll
     {
         private MeshPhysicsDispatcher.Lease? meshDispatcherLease;
         private long meshStageStart;
-        internal long meshCollisionTicks, meshSolveTicks;
+        private long meshCollisionTicks, meshSolveTicks;
+
+        /// <summary>A frame's substeps start: the mesh stage timings count from zero.</summary>
+        internal void ResetStepTimings()
+        {
+            meshSolveTicks = 0;
+            meshCollisionTicks = 0;
+        }
 
         internal void InitializeMeshTiming()
         {

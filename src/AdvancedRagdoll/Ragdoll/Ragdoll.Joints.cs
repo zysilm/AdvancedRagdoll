@@ -21,8 +21,6 @@ public unsafe partial class Ragdoll
     // (Ragdoll.Joints.cs).
     private readonly JointModel joints;
 
-    private List<RecoilRelax> recoilRelaxers => joints.RecoilRelaxers;
-
     /// <summary>
     /// Per-bone worst swing-limit utilisation (current angle / limit angle; ≈1 = the joint
     /// is pinned on its range edge). Covers ball cones and the Tier-C directional limits.
@@ -215,7 +213,6 @@ public unsafe partial class Ragdoll
         private readonly Dictionary<string, (ConstraintHandle Handle, AngularMotor Original)> angularMotorByBone = new();
         private readonly Dictionary<string, (ConstraintHandle Handle, SwingLimit Original)> swingLimitByBone = new();
         private readonly List<RecoilRelax> recoilRelaxers = new();
-        internal List<RecoilRelax> RecoilRelaxers => recoilRelaxers;
 
         private const float RecoilSwingAngle = 1.7f; // ~97° — wide arc during the recoil window
 

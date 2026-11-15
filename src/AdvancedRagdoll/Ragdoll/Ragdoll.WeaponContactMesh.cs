@@ -13,6 +13,17 @@ public unsafe partial class Ragdoll
     // Weapon-only body surfaces (Ragdoll.WeaponContactMesh.cs).
     private readonly WeaponContactSurfaces weaponContact;
 
+    /// <summary>A weapon rests on the cached body surface instead of the ragdoll volumes. The first weapon makes the
+    /// surface twins; their surface comes from the recorded <see cref="GetWeaponContactMesh"/>, asked here.</summary>
+    private void AttachWeaponContactBodyCore(BodyHandle weapon)
+    {
+        var step = weaponContact.PrepareAttach();
+        if (step == WeaponContactSurfaces.AttachStep.Skip) return;
+        if (step == WeaponContactSurfaces.AttachStep.CreateSurfaces)
+            weaponContact.CreateProxies(GetWeaponContactMesh(targetCharacterAddress));
+        weaponContact.AddWeapon(weapon);
+    }
+
     /// <summary>
     /// Weapon-only body surfaces. Ragdoll bodies keep their lightweight volumes; each body with a
     /// cached surface gets a kinematic mesh twin that follows it and collides only with registered
@@ -46,11 +57,29 @@ public unsafe partial class Ragdoll
         internal HashSet<int> ProxyBodies => weaponContactProxyHandles;
         internal HashSet<int> ProxiedBodies => weaponContactProxiedBodyHandles;
 
-        /// <summary>Weapon body contacts use the cached body surface instead of the ragdoll volumes.</summary>
-        internal void Attach(BodyHandle weapon)
+        /// <summary>What attaching a weapon takes.</summary>
+        internal enum AttachStep
         {
-            if (ctx.Simulation == null || !ctx.Settings.WeaponBodyMeshContacts || ctx.IsGeneric) return;
-            if (weaponContactProxies.Count == 0) CreateWeaponContactProxies();
+            /// <summary>Weapon body contacts are off (or there is no simulation, or the rig is generated).</summary>
+            Skip,
+            /// <summary>No twins yet: the body surface is needed to make them, then the weapon is added.</summary>
+            CreateSurfaces,
+            /// <summary>The weapon is added (to the twins there are).</summary>
+            AddWeapon,
+        }
+
+        /// <summary>Weapon body contacts use the cached body surface instead of the ragdoll volumes: whether they are
+        /// on, and whether the twins must be made first (the ragdoll asks the recorded surface for them).</summary>
+        internal AttachStep PrepareAttach()
+        {
+            if (ctx.Simulation == null || !ctx.Settings.WeaponBodyMeshContacts || ctx.IsGeneric) return AttachStep.Skip;
+            if (weaponContactProxies.Count == 0 && ctx.BufferPool != null) return AttachStep.CreateSurfaces;
+            return AttachStep.AddWeapon;
+        }
+
+        /// <summary>The weapon collides with the twins (when there are any).</summary>
+        internal void AddWeapon(BodyHandle weapon)
+        {
             if (weaponContactProxies.Count > 0) weaponContactBodyHandles.Add(weapon.Value);
         }
 
@@ -60,10 +89,10 @@ public unsafe partial class Ragdoll
             RemoveWeaponContactProxies();
         }
 
-        private void CreateWeaponContactProxies()
+        /// <summary>The twins, on the body surface of the target (<paramref name="cache"/>, null when it has none). The
+        /// simulation and the buffer pool exist (<see cref="PrepareAttach"/>).</summary>
+        internal void CreateProxies(FrozenMeshGeometryCache? cache)
         {
-            if (ctx.Simulation == null || ctx.BufferPool == null) return;
-            var cache = ctx.Core.GetWeaponContactMesh(ctx.TargetCharacterAddress);
             if (ctx.Recorder.IsRecording) ctx.Recorder.MeshCache(cache, "weaponContact");
             if (cache == null) return;
             var ragdollBones = ctx.Bodies;
@@ -73,11 +102,11 @@ public unsafe partial class Ragdoll
                 // Bodies that already collide through their rendered mesh need no twin.
                 if (rb.BoneIndex < 0 || rb.MeshGeometry != null || !ctx.Meshes.TryGetCollisionGeometry(cache, rb.Name, out var local)) continue;
                 Mesh mesh;
-                try { mesh = TwoSidedMesh.Create(local, ctx.BufferPool); }
+                try { mesh = TwoSidedMesh.Create(local, ctx.BufferPool!); }
                 catch (Exception ex) { ctx.Log.Warning(ex, $"Weapon contact surface rejected for {rb.Name}; weapon uses its volume."); continue; }
                 TypedIndex shape;
-                try { shape = ctx.Simulation.Shapes.Add(mesh); }
-                catch { mesh.Dispose(ctx.BufferPool); throw; }
+                try { shape = ctx.Simulation!.Shapes.Add(mesh); }
+                catch { mesh.Dispose(ctx.BufferPool!); throw; }
                 ctx.GetBonePoseFromBody(rb, out var origin, out var rotation, out _, out _);
                 if (ctx.Recorder.IsRecording) ctx.Recorder.MeshUse("weaponContactProxy", rb.Name, local);
                 var body = ctx.Simulation.Bodies.Add(BodyDescription.CreateKinematic(new RigidPose(origin, rotation), default,

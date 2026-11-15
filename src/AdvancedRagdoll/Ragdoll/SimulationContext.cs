@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Numerics;
 using AdvancedRagdoll.Hosting;
-using AdvancedRagdoll.MeshVolume;
 using AdvancedRagdoll.SkeletonProfiles;
 using BepuPhysics;
 using BepuUtilities.Memory;
@@ -10,8 +9,7 @@ using BepuSimulation = BepuPhysics.Simulation;
 
 namespace AdvancedRagdoll;
 
-// The shared simulation context and the seam to the part of the class not yet split into components
-// (docs/ARCHITECTURE.md §8).
+// The shared simulation context of the ragdoll and its components (docs/ARCHITECTURE.md §8).
 public unsafe partial class Ragdoll
 {
     /// <summary>The fixed physics step. One value for the stepping loop and every component.</summary>
@@ -20,16 +18,17 @@ public unsafe partial class Ragdoll
     /// <summary>
     /// The state many components read and write: the host services they use, the simulation, the ragdoll's bodies and
     /// the skeleton root transform. A plain object with fixed fields, created with the ragdoll and handed to each
-    /// component in its constructor. The ragdoll's own code reaches the same fields through forwarding properties
-    /// (Ragdoll.cs) until it is split into components too. Only what an extracted component needs lives here.
+    /// component in its constructor. The ragdoll's own code (the recorded layer, the activation flow, the step
+    /// sequence) reaches the same fields through forwarding properties (Ragdoll.cs). Only what a component needs lives
+    /// here. A component that needs another component is handed it in its constructor (docs/ARCHITECTURE.md §8);
+    /// nothing reaches back into the ragdoll.
     /// </summary>
     private sealed class SimulationContext
     {
-        internal SimulationContext(CoreCalls core, SkeletonProfile profile, RagdollBoneConfig[] boneDefaults,
+        internal SimulationContext(SkeletonProfile profile, RagdollBoneConfig[] boneDefaults,
             IHostSkeletonSource skeletons, IHostWorldQuery world, IMeshSource meshes, IHostActors actors,
             IRagdollClock clock, IRagdollLog log)
         {
-            Core = core;
             Profile = profile;
             BoneDefaults = boneDefaults;
             Skeletons = skeletons;
@@ -39,9 +38,6 @@ public unsafe partial class Ragdoll
             Clock = clock;
             Log = log;
         }
-
-        /// <summary>Calls into the part of the ragdoll that is not a component yet.</summary>
-        internal readonly CoreCalls Core;
 
         // Host services (the recording decorators where the ragdoll records them) and the settings of this frame.
         internal readonly HostSettings Settings = new();
@@ -281,22 +277,5 @@ public unsafe partial class Ragdoll
         /// <summary>How far the render frame is between the last two physics steps (1 before the first step).</summary>
         internal float PhysicsInterpolation =>
             HasPrevPhysicsState ? System.Math.Clamp(PhysicsAccumulator / FixedTimestep, 0, 1) : 1;
-    }
-
-    /// <summary>
-    /// What the components call in the part of the ragdoll that is not a component yet: recording, the mesh caches,
-    /// constraint removal and the character scale. Every member forwards to the ragdoll's own
-    /// method unchanged; the list shrinks as those parts become components.
-    /// </summary>
-    private sealed class CoreCalls
-    {
-        private readonly Ragdoll owner;
-        internal CoreCalls(Ragdoll owner) { this.owner = owner; }
-
-        internal FrozenMeshGeometryCache? GetWeaponContactMesh(nint address) => owner.GetWeaponContactMesh(address);
-        internal FrozenMeshGeometryCache? CachedSurfaceFor(nint address) => owner.CachedSurfaceFor(address);
-
-        // a6-2
-        internal FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address) => owner.CaptureFrozenMeshCache(address);
     }
 }

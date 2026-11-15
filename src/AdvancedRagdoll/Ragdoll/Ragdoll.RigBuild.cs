@@ -22,14 +22,11 @@ public unsafe partial class Ragdoll
 {
     // The rig build (RigBuilder below): the simulation, the bodies and their shapes, each joint's constraints.
     private readonly RigBuilder rigBuilder;
-    // Soft-tissue (SoftBody) rig bodies, owned by the rig build (RigBuilder.SoftBodyBodies).
-    private HashSet<int> softBodyBodyHandles => rigBuilder.SoftBodyBodies;
 
     private bool InitializePhysics()
     {
         water.Reset();
-        activeRagdollMeshVolumes = settings.RagdollMeshVolumes;
-        activeMeshCacheRevision = settings.RagdollMeshCacheRevision;
+        meshVolumes.BeginRig(settings.RagdollMeshVolumes, settings.RagdollMeshCacheRevision);
         var skel = skeletons.TryGetSkeleton(targetCharacterAddress, PosePurpose.Init);
         if (skel == null) return false;
         initialBoneCount = skel.BoneCount;
@@ -56,7 +53,7 @@ public unsafe partial class Ragdoll
         // direct parent is missing from the skeleton (see parent resolution below).
         var defByName = new Dictionary<string, RagdollBoneDef>();
         ragdollBones.Clear();
-        softBodyBodyHandles.Clear();
+        rigBuilder.ClearSoftBodies();
         // Squash state must not survive into a new rig: stale TouchedScale/BaseScale entries
         // from the previous corpse would map onto different bone indices.
         softTissue.BeginRig();
@@ -109,20 +106,18 @@ public unsafe partial class Ragdoll
 
         // Record the active defs so StepAndApply reads capsule extents from the set
         // actually in use (human or generated) rather than re-deriving the human set.
-        activeDefByName.Clear();
-        foreach (var def in BoneDefs)
-            activeDefByName[def.Name] = def;
+        skeletonReader.SetActiveDefs(BoneDefs);
         if (rec != null) RecBoneDefs(BoneDefs, nameToIndex, genericSkeleton);
 
         // Raycast for ground height
-        groundY = skelWorldPos.Y;
+        ground.SetGroundY(skelWorldPos.Y);
         if (world.Raycast(RaycastSite.InitGround,
                 new Vector3(skelWorldPos.X, skelWorldPos.Y + TerrainRaycastStartYOffset, skelWorldPos.Z),
                 new Vector3(0, -1, 0),
                 TerrainRaycastDistance,
                 out var hitInfo))
         {
-            groundY = hitInfo.Point.Y;
+            ground.SetGroundY(hitInfo.Point.Y);
         }
         log.Info($"Ragdoll: Raycast ground Y={groundY:F3}");
 
@@ -154,7 +149,7 @@ public unsafe partial class Ragdoll
                 NpcCollisionKinematicBodies = npcCollisionKinematicBodyHandles,
                 NpcTraversalGhostKinematicBodies = npcTraversalGhostKinematicBodyHandles,
                 NpcTraversalDynamicBodies = npcTraversalDynamicBodyHandles,
-                SoftBodyBodies = softBodyBodyHandles,
+                SoftBodyBodies = rigBuilder.SoftBodyBodies,
                 WeaponContactBodies = weaponContact.WeaponBodies,
                 WeaponContactProxyBodies = weaponContact.ProxyBodies,
                 WeaponContactProxiedBodies = weaponContact.ProxiedBodies,
@@ -181,7 +176,7 @@ public unsafe partial class Ragdoll
             var offset = new Vector3(bone.Translation.X, bone.Translation.Y, bone.Translation.Z) * skelWorldScale;
             if (float.IsFinite(offset.LengthSquared())) bodyReach = MathF.Max(bodyReach, offset.Length());
         }
-        (terrainPatchRadius, terrainPatchRefreshDistance, terrainPatchStep) = CollisionMeshGeometry.PatchFor(bodyReach);
+        ground.SizePatches(bodyReach);
 
         int enemyPatches = 0;
         AddTerrainPatch(skelWorldPos.X, skelWorldPos.Z, groundY);
@@ -225,7 +220,7 @@ public unsafe partial class Ragdoll
         var boneWorldRotations = bonePoses.WorldRotations;
 
         // Store real terrain level before any offset
-        realGroundY = groundY;
+        ground.KeepRealGround();
 
         // Fit collision geometry before body creation. Bodies may be offset from their bone and use
         // a measured axis/length, but joint anchors and topology remain on the skeleton pivots.
@@ -233,7 +228,7 @@ public unsafe partial class Ragdoll
         var bodyMeshVolumes = settings.RagdollMeshVolumes && !genericSkeleton
             ? meshVolumes.BuildBodyMeshVolumes(skel, defByName, nameToIndex, boneWorldPositions, boneWorldRotations)
             : new Dictionary<int, BodyMeshGeometry>();
-        if (!settings.RagdollMeshVolumes) MeshGeometryStatus = "Rendered mesh collision disabled";
+        if (!settings.RagdollMeshVolumes) meshVolumes.SetStatus("Rendered mesh collision disabled");
         var structuralMeshFits = !genericSkeleton &&
                                  ReadCharacterSurfaceIdentity().IsHumanoid
             ? structuralFit.Resolve(skel, scheduler)
@@ -259,7 +254,7 @@ public unsafe partial class Ragdoll
         {
             var acceptedMeshes = ragdollBones.Count(b => b.MeshGeometry != null);
             var fallbackBodies = ragdollBones.Count - acceptedMeshes;
-            MeshGeometryStatus += $"; accepted {acceptedMeshes} mesh / {fallbackBodies} fallback bodies";
+            meshVolumes.AppendStatus($"; accepted {acceptedMeshes} mesh / {fallbackBodies} fallback bodies");
             int fullFaces = 0, collisionFaces = 0;
             float measuredError = 0;
             foreach (var rb in ragdollBones)
@@ -268,7 +263,7 @@ public unsafe partial class Ragdoll
                 collisionFaces += rb.MeshLod?.CollisionFaceCount ?? rb.MeshGeometry?.Indices.Length / 3 ?? 0;
                 measuredError = MathF.Max(measuredError, rb.MeshLod?.MaximumSampledSurfaceError ?? 0);
             }
-            MeshGeometryStatus += $"; initial collision {collisionFaces}/{fullFaces} faces, sampled initial error {measuredError * 1000:F2} mm";
+            meshVolumes.AppendStatus($"; initial collision {collisionFaces}/{fullFaces} faces, sampled initial error {measuredError * 1000:F2} mm");
             log.Info($"Ragdoll collision geometry: {MeshGeometryStatus}");
         }
 
@@ -284,10 +279,7 @@ public unsafe partial class Ragdoll
 
         // The bodies that actually arrive when this rig lands. Empty on a rig with no recognisable torso
         // (a non-humanoid), and IsTorsoBody then falls back to treating every body as one.
-        torsoBodyIndices.Clear();
-        for (int i = 0; i < ragdollBones.Count; i++)
-            if (TorsoBones.IndexOf(ragdollBones[i].Name) >= 0)
-                torsoBodyIndices.Add(i);
+        impacts.CollectTorsoBodies();
 
         // Tier D — one-time sanity log: resolved total should be ~RagdollBodyMass minus the
         // excluded cloth/weapon/breast bones (which keep their tiny literal masses).
@@ -306,9 +298,7 @@ public unsafe partial class Ragdoll
         }
 
         // Build ragdoll bone index set for fast lookup during propagation
-        ragdollBoneIndices.Clear();
-        foreach (var rb in ragdollBones)
-            ragdollBoneIndices.Add(rb.BoneIndex);
+        poseWriter.CollectBoneIndices();
 
         // Freeze animation so the death animation stops fighting physics.
         // With OverallSpeed=0, the animation system stops advancing time,
@@ -321,14 +311,14 @@ public unsafe partial class Ragdoll
 
         // Resolve the belly-follow bone: it must follow the pelvis to prevent mesh tearing
         nHaraIndex = ResolveBoneIndex(skel, skeletonProfile.Landmarks.BellyFollow);
-        kaoBodyBoneIndex = ResolveBoneIndex(skel, skeletonProfile.Landmarks.Head);
+        poseWriter.SetHeadBoneIndex(ResolveBoneIndex(skel, skeletonProfile.Landmarks.Head));
         CaptureFaceTraversalLandmarks(skel);
         log.Info($"Ragdoll: belly-follow bone index={nHaraIndex}, head bone index={kaoBodyBoneIndex}");
 
         // Create NPC collision volumes — dynamically discover bones from each NPC's skeleton.
         // Works for any model (humanoid, monster, dragon) — no hardcoded bone names.
-        npcCollisionStates.Clear();
-        npcTraversalAnchors.Clear();
+        characterColliders.ClearStates();
+        corpseTraversal.ClearAnchors();
         if (settings.NpcCollisionActive && colliders.HasSelector)
         {
             var scale = settings.RagdollNpcCollisionScale;
@@ -477,7 +467,10 @@ public unsafe partial class Ragdoll
     /// pairs and the soft-tissue leashes. It owns the set of soft-tissue bodies; it fills the joint model's and the soft
     /// tissue's tables through their methods, and calls the mesh volumes and the structural fit for the shapes they
     /// make. The ragdoll's InitializePhysics runs the steps and does everything between them that reads or records the
-    /// host or another subsystem's state. A component (docs/ARCHITECTURE.md §8).
+    /// host or another subsystem's state. One host read stays inside: <see cref="CreateJoints"/> reads the target's
+    /// facing (<c>IHostActors.GetFacing</c>) for the anatomical frame. It is not recorded there, as before; the replay
+    /// answers it from the facing in the target's Identity record, written at the start of the rig build. A component
+    /// (docs/ARCHITECTURE.md §8).
     /// </summary>
     private sealed class RigBuilder
     {
@@ -1765,5 +1758,8 @@ public unsafe partial class Ragdoll
         // a6-12
         /// <summary>Simulation teardown: the set of soft-tissue bodies.</summary>
         internal void Teardown() => softBodyBodyHandles.Clear();
+
+        /// <summary>A new rig: no soft-tissue bodies yet.</summary>
+        internal void ClearSoftBodies() => softBodyBodyHandles.Clear();
     }
 }

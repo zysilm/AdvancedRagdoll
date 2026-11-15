@@ -126,16 +126,15 @@ public unsafe partial class Ragdoll
     // Monster strike: during the attack window the monster's collider bones impart their swing
     // velocity as an impulse to nearby ragdoll bodies (a fast swing = a heavy hit, at the limb's
     // real contact point).
-    private float attackStrikeTimer { get => strike.AttackStrikeTimer; set => strike.AttackStrikeTimer = value; }
-    private float strikePower { get => strike.StrikePower; set => strike.StrikePower = value; }
-    private nint strikeColliderAddress { get => strike.ColliderAddress; set => strike.ColliderAddress = value; }
+    private float attackStrikeTimer => strike.AttackStrikeTimer;
+    private float strikePower => strike.StrikePower;
+    private nint strikeColliderAddress => strike.ColliderAddress;
     private HashSet<nint> strikeColliderAddresses => strike.ColliderAddresses;
-    private bool weaponPrevValid { get => strike.WeaponPrevValid; set => strike.WeaponPrevValid = value; }
     private HashSet<int> struckThisWindow => strike.StruckThisWindow;
 
     /// <summary>Impart a swing as an impulse to ragdoll bodies near <paramref name="point"/>.</summary>
     private void ApplyStrikeImpulse(Vector3 point, Vector3 swingVel, float radius)
-        => strike.ApplyImpulse(point, swingVel, radius, standingActive);
+        => strike.ApplyImpulse(point, swingVel, radius, standing.Active);
 
     /// <summary>
     /// A humanoid's weapon is a separate draw object, so it isn't in the bone collision capsules.
@@ -145,10 +144,10 @@ public unsafe partial class Ragdoll
     /// </summary>
     private void UpdateWeaponStrike(float dt)
     {
-        if (simulation == null || strikeColliderAddress == nint.Zero) { weaponPrevValid = false; return; }
-        if (!colliders.TryGetWeaponTransform(strikeColliderAddress, out var center, out var rot)) { weaponPrevValid = false; return; }
+        if (simulation == null || strikeColliderAddress == nint.Zero) { strike.InvalidateBlade(); return; }
+        if (!colliders.TryGetWeaponTransform(strikeColliderAddress, out var center, out var rot)) { strike.InvalidateBlade(); return; }
         if (rec != null) RecWeaponSample(center, rot);
-        strike.SweepWeapon(center, rot, dt, standingActive);
+        strike.SweepWeapon(center, rot, dt, standing.Active);
     }
 
     private void CancelAttackStrikeCore() => strike.Cancel();
@@ -176,6 +175,25 @@ public unsafe partial class Ragdoll
         // Each body is struck at most once per swing — the window spans many frames, so striking every
         // frame accumulated into a launch. One hit per swing makes strike power linear/predictable.
         internal readonly HashSet<int> StruckThisWindow = new();
+
+        /// <summary>The strike window counts down with the render frame.</summary>
+        internal void CountDownWindow(float dt)
+        {
+            if (AttackStrikeTimer > 0f) AttackStrikeTimer -= dt;
+        }
+
+        /// <summary>The blade's last sample is gone (no striker, or its weapon is not drawn).</summary>
+        internal void InvalidateBlade() => WeaponPrevValid = false;
+
+        /// <summary>This collider's bones (and its weapon) drive the strike.</summary>
+        internal void SetColliderAddress(nint address) => ColliderAddress = address;
+
+        /// <summary>A live collider is removed: it no longer strikes.</summary>
+        internal void RemoveColliderAddress(nint address)
+        {
+            if (ColliderAddress == address) ColliderAddress = nint.Zero;
+            ColliderAddresses.Remove(address);
+        }
 
         private Vector3 StrikeImpulse(Vector3 bodyPos, Vector3 contactPoint, float swingSpeed)
         {
@@ -294,8 +312,6 @@ public unsafe partial class Ragdoll
         }
         return best;
     }
-
-
 
     private void ApplyShakeCore(float intensity)
     {

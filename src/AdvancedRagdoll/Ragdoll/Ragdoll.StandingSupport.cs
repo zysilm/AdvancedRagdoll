@@ -14,11 +14,7 @@ public unsafe partial class Ragdoll
     // The standing hold and the wrist constraints (Ragdoll.StandingSupport.cs).
     private readonly StandingSupport standing;
 
-    internal bool IsStandingSupportActive => standingActive;
-
-    private bool standingActive { get => standing.Active; set => standing.Active = value; }
-    private List<ConstraintHandle> standingConstraints => standing.Constraints;
-    private List<ConstraintHandle> wristConstraints => standing.WristConstraints;
+    internal bool IsStandingSupportActive => standing.Active;
 
     private bool CreateStandingSupportCore(Vector3 anchorWorldPos, Quaternion uprightRot, string anchorBoneName)
     {
@@ -87,9 +83,7 @@ public unsafe partial class Ragdoll
         internal StandingSupport(SimulationContext ctx) { this.ctx = ctx; }
 
         /// <summary>True while the standing support holds the rig.</summary>
-        internal bool Active { get => standingActive; set => standingActive = value; }
-        internal List<ConstraintHandle> Constraints => standingConstraints;
-        internal List<ConstraintHandle> WristConstraints => wristConstraints;
+        internal bool Active => standingActive;
 
         /// <summary><paramref name="grabbing"/>: a grab holds the rig (it owns it; no support then).</summary>
         internal bool Create(Vector3 anchorWorldPos, Quaternion uprightRot, string anchorBoneName, bool grabbing)

@@ -47,10 +47,6 @@ public unsafe partial class Ragdoll
     private const float ImpactFollowThroughSeconds = 0.35f;
     private const float ImpactCooldown = 0.7f;     // one landing, not a stutter of them
 
-    /// <summary>The bodies that actually arrive when a body falls. Everything else is along for the
-    /// ride — and the feet, in an ordinary collapse, never left the floor.</summary>
-    private ImmutableArray<string> TorsoBones => skeletonProfile.ImpactTorsoBones;
-
     /// <summary>
     /// The joints released on impact so the limbs can follow through.
     ///
@@ -82,11 +78,8 @@ public unsafe partial class Ragdoll
     // The landing weight (Ragdoll.Impacts.cs).
     private readonly Impacts impacts;
 
-    private float impactFreezeRemaining { get => impacts.FreezeRemaining; set => impacts.FreezeRemaining = value; }
-    private float impactCooldownRemaining { get => impacts.CooldownRemaining; set => impacts.CooldownRemaining = value; }
-    private float previousDescentSpeed { get => impacts.PreviousDescentSpeed; set => impacts.PreviousDescentSpeed = value; }
-    private List<int> torsoBodyIndices => impacts.TorsoBodyIndices;
-    private uint impactRandomState { get => impacts.RandomState; set => impacts.RandomState = value; }
+    private float impactFreezeRemaining => impacts.FreezeRemaining;
+    private uint impactRandomState => impacts.RandomState;
 
     /// <summary>
     /// Watch the torso's descent collapse. A landing is simply a fall that the ground took most of in a
@@ -96,7 +89,7 @@ public unsafe partial class Ragdoll
     private void DetectImpact(float dt)
     {
         // A held/posed body (a grab or the standing support) is not landing.
-        if (impacts.Detect(dt, grabSlots.Count > 0 || standingActive, out var speed))
+        if (impacts.Detect(dt, grabSlots.Count > 0 || standing.Active, out var speed))
             StageImpact(speed);
     }
 
@@ -137,6 +130,22 @@ public unsafe partial class Ragdoll
         internal uint RandomState = 0x9E3779B9u;
 
         private bool IsTorsoBody(int index) => TorsoBodyIndices.Count == 0 || TorsoBodyIndices.Contains(index);
+
+        /// <summary>The rig build: the bodies that actually arrive when this rig lands (the profile's impact torso
+        /// bones; everything else is along for the ride, and the feet, in an ordinary collapse, never left the floor).
+        /// Empty on a rig with no recognisable torso (a non-humanoid), and every body counts as one then.</summary>
+        internal void CollectTorsoBodies()
+        {
+            var ragdollBones = ctx.Bodies;
+            var torsoBones = ctx.Profile.ImpactTorsoBones;
+            TorsoBodyIndices.Clear();
+            for (int i = 0; i < ragdollBones.Count; i++)
+                if (torsoBones.IndexOf(ragdollBones[i].Name) >= 0)
+                    TorsoBodyIndices.Add(i);
+        }
+
+        /// <summary>The hitstop runs out with the render frame (no step is taken while it runs).</summary>
+        internal void CountDownFreeze(float dt) => FreezeRemaining -= dt;
 
         /// <summary>True when the torso's descent was just arrested (a landing), with the speed it came down at.
         /// <paramref name="held"/>: a grab or the standing support holds the rig.</summary>

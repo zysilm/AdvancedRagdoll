@@ -42,10 +42,10 @@ public unsafe partial class Ragdoll
     private readonly Grab grab;
 
     private Dictionary<int, GrabSlot> grabSlots => grab.Slots;
-    private int nextGrabSlotId { get => grab.NextSlotId; set => grab.NextSlotId = value; }
+    private int nextGrabSlotId => grab.NextSlotId;
     // Address of the grabbing NPC whose collision is parked during grab (0 = none). Shared across
     // every slot — every pair a single grab session holds belongs to the same grabber.
-    private nint suspendedNpcAddress { get => grab.SuspendedNpcAddress; set => grab.SuspendedNpcAddress = value; }
+    private nint suspendedNpcAddress => grab.SuspendedNpcAddress;
 
     /// <summary>Request a firmer finite-force external Grab servo. This never makes a body
     /// kinematic and never changes internal joint stiffness or inertia.</summary>
@@ -74,18 +74,18 @@ public unsafe partial class Ragdoll
         // Guided-collapse servos are a short death-entry effect. Once an external hand takes
         // control, retire them instead of making the Grab servo fight pose targets inside the rig.
         StopDirectedCollapseSpike();
-        pendingDirectedCollapseSpike = false;
+        collapse.DisarmDirected();
         StopCollapseEntryConditioning();
-        pendingEntryConditionedKneePowerLoss = false;
+        collapse.DisarmEntryConditioning();
         StopKneePowerLossPattern();
-        pendingKneePowerLossPattern = false;
+        knee.Disarm();
 
         return grab.Create(boneName, targetBody, localOffset, initialTarget, grabbingNpcAddress, maxForce, maxSpeed,
             springFreq, GrabRigid);
     }
 
     /// <summary>Blend grab entry, then follow the live grip with finite-force position servos.</summary>
-    private void DriveGrabConstraints(float dt) => grab.Drive(dt, standingActive);
+    private void DriveGrabConstraints(float dt) => grab.Drive(dt, standing.Active);
 
     /// <summary>
     /// A compatibility bounding capsule for a ragdoll bone. Mesh bodies use actual triangle

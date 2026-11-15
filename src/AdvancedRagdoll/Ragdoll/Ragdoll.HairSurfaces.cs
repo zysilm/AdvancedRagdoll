@@ -44,7 +44,7 @@ public unsafe partial class Ragdoll
         /// when the cache itself is replaced (refresh, actor change).</summary>
         private void RefreshHairSurfaceRegions(IHostSkeleton? skel, nint address)
         {
-            var cache = ctx.Settings.RagdollHairBodyMesh ? ctx.Core.CachedSurfaceFor(address) : null;
+            var cache = ctx.Settings.RagdollHairBodyMesh ? meshVolumes.CachedSurfaceFor(address) : null;
             if (cache == hairSurfaceCache) return;
             hairSurfaceCache = cache;
             if (ctx.Recorder.IsRecording) ctx.Recorder.MeshCache(cache, "hairSurface");

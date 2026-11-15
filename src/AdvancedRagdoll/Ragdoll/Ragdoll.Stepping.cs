@@ -42,7 +42,7 @@ public unsafe partial class Ragdoll
             elapsed += dt;
             if (rec != null) RecRenderFrame(dt);
 
-            if (attackStrikeTimer > 0f) attackStrikeTimer -= dt;
+            strike.CountDownWindow(dt);
             UpdateWeaponStrike(dt);
 
             // Wait for activation delay (death animation plays first)
@@ -84,7 +84,7 @@ public unsafe partial class Ragdoll
 
         if (pendingDirectedCollapseSpike)
         {
-            pendingDirectedCollapseSpike = false;
+            collapse.DisarmDirected();
             if (!string.IsNullOrWhiteSpace(pendingDirectedProfileId))
                 BeginProfileDirectedCollapseSpike(pendingDirectedProfileId);
             else
@@ -99,14 +99,14 @@ public unsafe partial class Ragdoll
 
         if (pendingEntryConditionedKneePowerLoss)
         {
-            pendingEntryConditionedKneePowerLoss = false;
+            collapse.DisarmEntryConditioning();
             if (!BeginCollapseEntryConditioning(BeginKneePowerLossForwardPattern))
                 BeginKneePowerLossForwardPattern();
         }
 
         if (pendingKneePowerLossPattern)
         {
-            pendingKneePowerLossPattern = false;
+            knee.Disarm();
             BeginKneePowerLossForwardPattern();
         }
         return true;
@@ -126,7 +126,7 @@ public unsafe partial class Ragdoll
     // The fall gravity (Stepper.ApplyFallGravity): the water, a grab or the standing hold and the ground height come
     // from their components.
     private void ApplyFallGravity(float dt)
-        => stepper.ApplyFallGravity(dt, water.InWater, grabSlots.Count > 0 || standingActive, groundY);
+        => stepper.ApplyFallGravity(dt, water.InWater, grabSlots.Count > 0 || standing.Active, groundY);
 
     private static float BodyBottom(in RagdollBone bone, BodyReference body)
     {
@@ -187,7 +187,7 @@ public unsafe partial class Ragdoll
 
         var resting = DecideResting(dt, skeletonMoved);
         var colliderStart = System.Diagnostics.Stopwatch.GetTimestamp();
-        npcColliderMovedNearCorpse = false; // re-armed by this frame's collider updates for the next decision
+        characterColliders.ClearMovedNearCorpse(); // re-armed by this frame's collider updates for the next decision
 
         // Collapse controllers restrength their servos before stepping so updated torque ceilings
         // take effect this tick; each advances its own phase and retires itself.
@@ -314,8 +314,7 @@ public unsafe partial class Ragdoll
                         TerrainRaycastDistance,
                         out var hitInfo))
                 {
-                    realGroundY = hitInfo.Point.Y;
-                    groundY = realGroundY;
+                    ground.SetFromRaycast(hitInfo.Point.Y);
                     if (settings.RagdollVerboseLog)
                         log.Info($"[Ragdoll F{frameCount}] Ground re-raycast: realY={realGroundY:F3} physicsY={groundY:F3}");
                 }
@@ -347,7 +346,7 @@ public unsafe partial class Ragdoll
         // Rough corpse centre for the collider proximity gate. Any body serves — the wake
         // radius dwarfs the rig's own extent.
         if (ragdollBones.Count > 0)
-            corpseWakeCenter = simulation!.Bodies.GetBodyReference(ragdollBones[0].BodyHandle).Pose.Position;
+            characterColliders.SetWakeCenter(simulation!.Bodies.GetBodyReference(ragdollBones[0].BodyHandle).Pose.Position);
         RefreshCorpseBounds();
 
         water.UpdateProbe(dt);
@@ -398,7 +397,7 @@ public unsafe partial class Ragdoll
                             npcState.BoneStatics[b] = bs;
                         }
                     }
-                    npcCollisionStates[i] = npcState;
+                    characterColliders.SetState(i, npcState);
                     continue;
                 }
 
@@ -415,7 +414,7 @@ public unsafe partial class Ragdoll
                     {
                         ParkNpcStatics(ref npcState, npcCollisionParkPos, dt);
                         npcState.Parked = true;
-                        npcCollisionStates[i] = npcState;
+                        characterColliders.SetState(i, npcState);
                     }
                     continue;
                 }
@@ -424,7 +423,7 @@ public unsafe partial class Ragdoll
                 {
                     // Back in range — the reposition below snaps the statics onto the skeleton.
                     npcState.Parked = false;
-                    npcCollisionStates[i] = npcState;
+                    characterColliders.SetState(i, npcState);
                 }
 
                 if (npcState.IsMesh)
@@ -446,7 +445,7 @@ public unsafe partial class Ragdoll
 
                     if (rec != null) RecActorTransform(ActorSite.ColliderMesh, npcState.NpcAddress, meshWorldPos, meshWorldRot, false, Vector3.One);
                     MoveNpcKinematic(ref npcState, npcState.MeshHandle, meshWorldPos, meshWorldRot, dt);
-                    npcCollisionStates[i] = npcState;
+                    characterColliders.SetState(i, npcState);
                     continue;
                 }
 
@@ -464,7 +463,7 @@ public unsafe partial class Ragdoll
                         Quaternion.Identity, dt);
                     npcState.TraversalSampleRoot = fallbackRoot;
                     npcState.HasTraversalSampleRoot = true;
-                    npcCollisionStates[i] = npcState;
+                    characterColliders.SetState(i, npcState);
                     continue;
                 }
 
@@ -578,7 +577,7 @@ public unsafe partial class Ragdoll
                             ApplyStrikeImpulse(capsuleCenter, swingVel, StrikeContactRadius);
                     }
                 }
-                npcCollisionStates[i] = npcState;
+                characterColliders.SetState(i, npcState);
             }
             catch { }
         }
@@ -605,7 +604,7 @@ public unsafe partial class Ragdoll
             //
             // The accumulator is dropped rather than banked, or the frozen time would all come back at
             // once as a burst of catch-up substeps and undo the pause.
-            impactFreezeRemaining -= dt;
+            impacts.CountDownFreeze(dt);
             stepper.DropBacklog();
         }
         else if (!resting)
@@ -613,7 +612,7 @@ public unsafe partial class Ragdoll
             stepper.Accumulate(dt);
             var meshFrameStart = activeRagdollMeshVolumes && !activeRagdollIsGeneric
                 ? clock.GetTimestamp(ClockSite.MeshFrameEarlyOut) : 0;
-            meshCollisionTicks = meshSolveTicks = 0;
+            meshVolumes.ResetStepTimings();
             var maxLinear = ActiveClassProfile.ClassConstants.MaxLinearVelocity;
             var maxAngular = ActiveClassProfile.ClassConstants.MaxAngularVelocity;
             // In a slow frame (a crowd of corpses, a hitch) one substep only: catching up with
@@ -681,7 +680,7 @@ public unsafe partial class Ragdoll
 
         poseWriter.BeginFrame(skel, pose);
 
-        frameCount++;
+        stepper.CountFrame();
         var logThisFrame = settings.RagdollVerboseLog && (frameCount <= 3 || frameCount % 12 == 0);
 
         // Pass 1 (the pose writer): read every body's bone world pose. A body that is not finite deactivates the
@@ -800,10 +799,9 @@ public unsafe partial class Ragdoll
         }
     }
 
-    // The stepping loop (a component, below), and its state the rest of the class still reaches under the old names.
+    // The stepping loop (a component, below), and the frame counter the logs read.
     private readonly Stepper stepper;
-    private ref long lastFrameTimestamp => ref stepper.LastFrameTimestamp;
-    private ref int frameCount => ref stepper.FrameCount;
+    private int frameCount => stepper.FrameCount;
 
     /// <summary>
     /// The stepping loop's own state and rules (docs/ARCHITECTURE.md §8): the frame clock, the fixed-step accumulator
@@ -818,10 +816,24 @@ public unsafe partial class Ragdoll
 
         internal Stepper(SimulationContext ctx) { this.ctx = ctx; }
 
-        // Frame-rate-independent physics timing: the wall-clock stamp of the previous render frame (0 = none yet).
-        internal long LastFrameTimestamp;
+        // Frame-rate-independent physics timing. The render hook fires once per rendered
+        // frame at whatever framerate the game runs (30/60/120/144…). Stepping a fixed
+        // 1/60 every call made the ragdoll run in slow-motion below 60fps and fast above it.
+        // We measure real wall-clock dt and advance the simulation in fixed-size substeps.
+        private const int MaxSubstepsPerFrame = 4;  // cap catch-up to avoid a spiral of death
+        private const float SlowFrameSeconds = 1f / 30f; // slower than this, one substep a frame
+        private const float MaxFrameDelta = 0.1f;   // ignore huge gaps (loading screens, hitches)
+
+        // The wall-clock stamp of the previous render frame (0 = none yet).
+        private long lastFrameTimestamp;
         // Diagnostic frame counter.
-        internal int FrameCount;
+        internal int FrameCount { get; private set; }
+
+        /// <summary>Activation: the next frame is the first (its delta is one fixed step).</summary>
+        internal void ResetFrameClock() => lastFrameTimestamp = 0;
+
+        /// <summary>A frame is written back: the diagnostic counter advances.</summary>
+        internal void CountFrame() => FrameCount++;
 
         /// <summary>
         /// Real wall-clock seconds since the previous render frame, clamped to a sane range.
@@ -832,13 +844,13 @@ public unsafe partial class Ragdoll
         {
             var clock = ctx.Clock;
             var now = clock.GetTimestamp(ClockSite.FrameDelta);
-            if (LastFrameTimestamp == 0)
+            if (lastFrameTimestamp == 0)
             {
-                LastFrameTimestamp = now;
+                lastFrameTimestamp = now;
                 return FixedTimestep;
             }
-            var dt = (float)((now - LastFrameTimestamp) / (double)clock.Frequency);
-            LastFrameTimestamp = now;
+            var dt = (float)((now - lastFrameTimestamp) / (double)clock.Frequency);
+            lastFrameTimestamp = now;
             if (dt < 0f) dt = 0f;
             if (dt > MaxFrameDelta) dt = MaxFrameDelta;
             return dt;

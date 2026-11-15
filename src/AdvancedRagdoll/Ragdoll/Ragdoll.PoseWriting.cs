@@ -16,9 +16,8 @@ public unsafe partial class Ragdoll
     // Writing the simulated pose back onto the host skeleton every frame (Ragdoll.PoseWriting.cs).
     private readonly PoseWriter poseWriter;
 
-    // a6-8: the rig's bone index set and the head bone index live in the pose writer (the rig build fills them).
-    private HashSet<int> ragdollBoneIndices => poseWriter.RagdollBoneIndices;
-    private ref int kaoBodyBoneIndex => ref poseWriter.HeadBoneIndex;
+    // The head bone index (the pose writer's; the rig build sets it): the hair rig is built on it.
+    private int kaoBodyBoneIndex => poseWriter.HeadBoneIndex;
 
     private static bool IsDescendantOrSelf(IHostSkeleton skel, int bone, int root)
     {
@@ -79,8 +78,7 @@ public unsafe partial class Ragdoll
         // Head bone index (the profile's head) — used for hair physics and partial skeleton propagation
         private int kaoBodyBoneIndex = -1;
 
-        internal HashSet<int> RagdollBoneIndices => ragdollBoneIndices;
-        internal ref int HeadBoneIndex => ref kaoBodyBoneIndex;
+        internal int HeadBoneIndex => kaoBodyBoneIndex;
         /// <summary>The bodies' bone world positions read this frame (<see cref="ReadBodies"/>).</summary>
         internal Vector3[] WorldPositions => cachedWorldPositions!;
         /// <summary>Which bodies were read this frame (<see cref="ReadBodies"/>).</summary>
@@ -456,5 +454,16 @@ public unsafe partial class Ragdoll
 
         /// <summary>Deactivation: no head bone.</summary>
         internal void ResetHeadBoneIndex() => kaoBodyBoneIndex = -1;
+
+        /// <summary>The rig build: the bone index set of the new rig (fast lookup during propagation).</summary>
+        internal void CollectBoneIndices()
+        {
+            ragdollBoneIndices.Clear();
+            foreach (var rb in ctx.Bodies)
+                ragdollBoneIndices.Add(rb.BoneIndex);
+        }
+
+        /// <summary>The rig build: the head bone of this skeleton (-1 when it has none).</summary>
+        internal void SetHeadBoneIndex(int index) => kaoBodyBoneIndex = index;
     }
 }

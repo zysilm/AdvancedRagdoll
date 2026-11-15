@@ -17,20 +17,16 @@ public unsafe partial class Ragdoll
     // The directed collapse and the collapse entry conditioning (Ragdoll.GuidedCollapse.cs).
     private readonly GuidedCollapse collapse;
 
-    private bool pendingDirectedCollapseSpike { get => collapse.PendingDirected; set => collapse.PendingDirected = value; }
-    private string pendingDirectedProfileId { get => collapse.PendingProfileId; set => collapse.PendingProfileId = value; }
-    private float pendingDirectedDuration { get => collapse.PendingDuration; set => collapse.PendingDuration = value; }
-    private float pendingDirectedFootForce { get => collapse.PendingFootForce; set => collapse.PendingFootForce = value; }
-    private float pendingDirectedPelvisForce { get => collapse.PendingPelvisForce; set => collapse.PendingPelvisForce = value; }
-    private float pendingDirectedDrop { get => collapse.PendingDrop; set => collapse.PendingDrop = value; }
-    private float pendingDirectedForward { get => collapse.PendingForward; set => collapse.PendingForward = value; }
-    private float pendingDirectedPitchDegrees { get => collapse.PendingPitchDegrees; set => collapse.PendingPitchDegrees = value; }
+    private bool pendingDirectedCollapseSpike => collapse.PendingDirected;
+    private string pendingDirectedProfileId => collapse.PendingProfileId;
+    private float pendingDirectedDuration => collapse.PendingDuration;
+    private float pendingDirectedFootForce => collapse.PendingFootForce;
+    private float pendingDirectedPelvisForce => collapse.PendingPelvisForce;
+    private float pendingDirectedDrop => collapse.PendingDrop;
+    private float pendingDirectedForward => collapse.PendingForward;
+    private float pendingDirectedPitchDegrees => collapse.PendingPitchDegrees;
     private bool directedCollapseActive => collapse.DirectedActive;
-    private bool pendingEntryConditionedKneePowerLoss
-    {
-        get => collapse.PendingEntryConditionedKneePowerLoss;
-        set => collapse.PendingEntryConditionedKneePowerLoss = value;
-    }
+    private bool pendingEntryConditionedKneePowerLoss => collapse.PendingEntryConditionedKneePowerLoss;
     private bool entryConditioningActive => collapse.EntryConditioningActive;
 
     // --- Death-collapse spike (experimental proof-of-concept) ---
@@ -327,19 +323,15 @@ public unsafe partial class Ragdoll
         }
 
         // What a request armed for the next death (begun when the simulation is ready).
-        internal bool PendingDirected { get => pendingDirectedCollapseSpike; set => pendingDirectedCollapseSpike = value; }
-        internal string PendingProfileId { get => pendingDirectedProfileId; set => pendingDirectedProfileId = value; }
-        internal float PendingDuration { get => pendingDirectedDuration; set => pendingDirectedDuration = value; }
-        internal float PendingFootForce { get => pendingDirectedFootForce; set => pendingDirectedFootForce = value; }
-        internal float PendingPelvisForce { get => pendingDirectedPelvisForce; set => pendingDirectedPelvisForce = value; }
-        internal float PendingDrop { get => pendingDirectedDrop; set => pendingDirectedDrop = value; }
-        internal float PendingForward { get => pendingDirectedForward; set => pendingDirectedForward = value; }
-        internal float PendingPitchDegrees { get => pendingDirectedPitchDegrees; set => pendingDirectedPitchDegrees = value; }
-        internal bool PendingEntryConditionedKneePowerLoss
-        {
-            get => pendingEntryConditionedKneePowerLoss;
-            set => pendingEntryConditionedKneePowerLoss = value;
-        }
+        internal bool PendingDirected => pendingDirectedCollapseSpike;
+        internal string PendingProfileId => pendingDirectedProfileId;
+        internal float PendingDuration => pendingDirectedDuration;
+        internal float PendingFootForce => pendingDirectedFootForce;
+        internal float PendingPelvisForce => pendingDirectedPelvisForce;
+        internal float PendingDrop => pendingDirectedDrop;
+        internal float PendingForward => pendingDirectedForward;
+        internal float PendingPitchDegrees => pendingDirectedPitchDegrees;
+        internal bool PendingEntryConditionedKneePowerLoss => pendingEntryConditionedKneePowerLoss;
 
         /// <summary>True while the directed collapse drives the rig.</summary>
         internal bool DirectedActive => directedCollapseActive;

@@ -158,37 +158,71 @@ internal sealed class Rig : IDisposable
     private static readonly PropertyInfo SimulationProperty = typeof(Ragdoll)
         .GetProperty("simulation", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
-    /// <summary>Private state of the ragdoll the output watches, by name. Each is a field before stage A6-2 and a
-    /// field or a forwarding property after it; the names are the same in both (see README.md).</summary>
-    private static readonly string[] PrivateNames =
+    /// <summary>Private state of the ragdoll the output watches: the name the output prints (the ragdoll's field before
+    /// stage A6-2) and where it lives since the split (a component's member, or the shared context's, under the
+    /// ragdoll's private field of that component). The value is read at the path; on a library without that path
+    /// (before stage A6-2) it is read from the ragdoll's field of the printed name (see README.md).</summary>
+    private static readonly (string Name, string Path)[] PrivateMembers =
     [
-        "impactFreezeRemaining", "impactCooldownRemaining", "previousDescentSpeed", "impactRandomState",
-        "attackStrikeTimer", "strikePower", "strikeColliderAddress", "weaponPrevValid", "struckThisWindow",
-        "strikeColliderAddresses", "grabSlots", "nextGrabSlotId", "suspendedNpcAddress", "recoilRelaxers",
-        "standingActive", "standingConstraints", "wristConstraints", "carriedRigs", "externalBodies", "externalRigs",
-        "externalBodyGeneration", "biomechanicalSettleRemaining", "prevAllAsleep",
+        ("impactFreezeRemaining", "impacts.FreezeRemaining"), ("impactCooldownRemaining", "impacts.CooldownRemaining"),
+        ("previousDescentSpeed", "impacts.PreviousDescentSpeed"), ("impactRandomState", "impacts.RandomState"),
+        ("attackStrikeTimer", "strike.AttackStrikeTimer"), ("strikePower", "strike.StrikePower"),
+        ("strikeColliderAddress", "strike.ColliderAddress"), ("weaponPrevValid", "strike.WeaponPrevValid"),
+        ("struckThisWindow", "strike.StruckThisWindow"), ("strikeColliderAddresses", "strike.ColliderAddresses"),
+        ("grabSlots", "grab.Slots"), ("nextGrabSlotId", "grab.NextSlotId"),
+        ("suspendedNpcAddress", "grab.SuspendedNpcAddress"), ("recoilRelaxers", "joints.recoilRelaxers"),
+        ("standingActive", "standing.standingActive"), ("standingConstraints", "standing.standingConstraints"),
+        ("wristConstraints", "standing.wristConstraints"), ("carriedRigs", "external.carriedRigs"),
+        ("externalBodies", "external.BodyList"), ("externalRigs", "external.Rigs"),
+        ("externalBodyGeneration", "external.Generation"),
+        ("biomechanicalSettleRemaining", "ctx.BiomechanicalSettleRemaining"), ("prevAllAsleep", "ctx.PrevAllAsleep"),
     ];
 
-    private static readonly Func<object, object?>[] PrivateGetters = PrivateNames.Select(Getter).ToArray();
+    private static readonly string[] PrivateNames = PrivateMembers.Select(m => m.Name).ToArray();
+    private static readonly Func<object, object?>[] PrivateGetters = PrivateMembers.Select(m => Getter(m.Name, m.Path)).ToArray();
 
-    private static Func<object, object?> Getter(string name)
+    private const BindingFlags MemberFlags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+
+    private static MemberInfo Member(Type type, string name)
+        => (MemberInfo?)type.GetField(name, MemberFlags) ?? type.GetProperty(name, MemberFlags)
+           ?? throw new MissingMemberException(type.Name, name);
+
+    private static object? Read(MemberInfo member, object target)
+        => member is FieldInfo field ? field.GetValue(target) : ((PropertyInfo)member).GetValue(target);
+
+    /// <summary>The owner of <paramref name="path"/>'s last member (the ragdoll's component or context) and that member;
+    /// null when the ragdoll has no field of the path's first name (a library before stage A6-2).</summary>
+    private static (Func<object, object> Owner, MemberInfo Member)? Resolve(string path)
     {
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
-        if (typeof(Ragdoll).GetField(name, flags) is { } field) return o => field.GetValue(o);
-        if (typeof(Ragdoll).GetProperty(name, flags) is { } property) return o => property.GetValue(o);
-        throw new MissingMemberException(nameof(Ragdoll), name);
+        var parts = path.Split('.');
+        var first = typeof(Ragdoll).GetField(parts[0], MemberFlags | BindingFlags.DeclaredOnly);
+        if (first == null) return null;
+        var member = Member(first.FieldType, parts[1]);
+        return (o => first.GetValue(o)!, member);
     }
 
-    /// <summary>Writes a private member (a field, or a forwarding property). Only for state no internal call can
-    /// reach (the strike window, see README.md).</summary>
+    private static Func<object, object?> Getter(string name, string path)
+    {
+        if (Resolve(path) is { } at) return o => Read(at.Member, at.Owner(o));
+        var field = Member(typeof(Ragdoll), name);
+        return o => Read(field, o);
+    }
+
+    /// <summary>Writes a private member (by its printed name; at its path since the split). Only for state no internal
+    /// call can reach (the strike window, see README.md).</summary>
     public void Force(string name, object value)
     {
-        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
         Output.Line($"A force {name}={Format(value)}");
         lastCallFrame = Frame;
-        if (typeof(Ragdoll).GetField(name, flags) is { } field) field.SetValue(Ragdoll, value);
-        else if (typeof(Ragdoll).GetProperty(name, flags) is { } property) property.SetValue(Ragdoll, value);
-        else throw new MissingMemberException(nameof(Ragdoll), name);
+        var path = PrivateMembers.First(m => m.Name == name).Path;
+        if (Resolve(path) is { } at) Write(at.Member, at.Owner(Ragdoll), value);
+        else Write(Member(typeof(Ragdoll), name), Ragdoll, value);
+    }
+
+    private static void Write(MemberInfo member, object target, object value)
+    {
+        if (member is FieldInfo field) field.SetValue(target, value);
+        else ((PropertyInfo)member).SetValue(target, value);
     }
 
     private static string Format(object? value) => value switch

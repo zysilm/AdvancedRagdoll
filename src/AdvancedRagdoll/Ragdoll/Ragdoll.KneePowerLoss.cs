@@ -17,7 +17,7 @@ public unsafe partial class Ragdoll
 
     internal bool KneePowerLossPatternActive => kneePowerLossActive;
 
-    private bool pendingKneePowerLossPattern { get => knee.Pending; set => knee.Pending = value; }
+    private bool pendingKneePowerLossPattern => knee.Pending;
     private bool kneePowerLossActive => knee.Active;
 
     private void RequestKneePowerLossForwardOnReadyCore()
@@ -92,7 +92,7 @@ public unsafe partial class Ragdoll
         internal KneePowerLoss(SimulationContext ctx) { this.ctx = ctx; }
 
         /// <summary>Armed for the next death: begins when the simulation is ready.</summary>
-        internal bool Pending { get => pendingKneePowerLossPattern; set => pendingKneePowerLossPattern = value; }
+        internal bool Pending => pendingKneePowerLossPattern;
         /// <summary>True while the pattern drives the rig.</summary>
         internal bool Active => kneePowerLossActive;
 

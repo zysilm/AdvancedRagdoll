@@ -9,38 +9,47 @@ namespace AdvancedRagdoll;
 
 public unsafe partial class Ragdoll
 {
-    // The cached body surfaces this controller carries over activations (the component's fields; the recording and
-    // the replay read and restore them).
-    private FrozenMeshGeometryCache? frozenMeshCache { get => meshVolumes.frozenMeshCache; set => meshVolumes.frozenMeshCache = value; }
-    private nint frozenMeshActor { get => meshVolumes.frozenMeshActor; set => meshVolumes.frozenMeshActor = value; }
-    private uint frozenMeshEntity { get => meshVolumes.frozenMeshEntity; set => meshVolumes.frozenMeshEntity = value; }
-    private int observedMeshCacheRevision { get => meshVolumes.observedMeshCacheRevision; set => meshVolumes.observedMeshCacheRevision = value; }
-    private int activeMeshCacheRevision { get => meshVolumes.activeMeshCacheRevision; set => meshVolumes.activeMeshCacheRevision = value; }
-    private bool observedMeshEnabled { get => meshVolumes.observedMeshEnabled; set => meshVolumes.observedMeshEnabled = value; }
-    private bool cachedMeshLodEnabled { get => meshVolumes.cachedMeshLodEnabled; set => meshVolumes.cachedMeshLodEnabled = value; }
-    private float cachedMeshLodTolerance { get => meshVolumes.cachedMeshLodTolerance; set => meshVolumes.cachedMeshLodTolerance = value; }
-    private long nextMeshCacheAttempt { get => meshVolumes.nextMeshCacheAttempt; set => meshVolumes.nextMeshCacheAttempt = value; }
-    private Dictionary<nint, (uint Entity, nint Draw, FrozenMeshGeometryCache? Cache)> weaponContactMeshes => meshVolumes.weaponContactMeshes;
-    private List<nint> weaponContactMeshOrder => meshVolumes.weaponContactMeshOrder;
-
-    /// <summary>The rendered surface already cached for this actor; never captures for hair.</summary>
-    private FrozenMeshGeometryCache? CachedSurfaceFor(nint address) => meshVolumes.CachedSurfaceFor(address);
+    // The cached body surfaces this controller carries over activations (read for the recording; the replay restores
+    // them through MeshVolumes.RestoreCarried).
+    private FrozenMeshGeometryCache? frozenMeshCache => meshVolumes.FrozenMeshCache;
+    private nint frozenMeshActor => meshVolumes.FrozenMeshActor;
+    private uint frozenMeshEntity => meshVolumes.FrozenMeshEntity;
+    private int observedMeshCacheRevision => meshVolumes.ObservedMeshCacheRevision;
+    private int activeMeshCacheRevision => meshVolumes.ActiveMeshCacheRevision;
+    private bool observedMeshEnabled => meshVolumes.ObservedMeshEnabled;
+    private bool cachedMeshLodEnabled => meshVolumes.CachedMeshLodEnabled;
+    private float cachedMeshLodTolerance => meshVolumes.CachedMeshLodTolerance;
+    private long nextMeshCacheAttempt => meshVolumes.NextMeshCacheAttempt;
+    private Dictionary<nint, (uint Entity, nint Draw, FrozenMeshGeometryCache? Cache)> weaponContactMeshes => meshVolumes.WeaponContactMeshes;
+    private List<nint> weaponContactMeshOrder => meshVolumes.WeaponContactMeshOrder;
 
     private sealed partial class MeshVolumes
     {
-        internal FrozenMeshGeometryCache? frozenMeshCache;
-        internal nint frozenMeshActor;
-        internal uint frozenMeshEntity;
-        internal int observedMeshCacheRevision = -1, activeMeshCacheRevision;
-        internal bool observedMeshEnabled, cachedMeshLodEnabled;
-        internal float cachedMeshLodTolerance;
-        internal long nextMeshCacheAttempt;
+        private FrozenMeshGeometryCache? frozenMeshCache;
+        private nint frozenMeshActor;
+        private uint frozenMeshEntity;
+        private int observedMeshCacheRevision = -1;
+        private bool observedMeshEnabled, cachedMeshLodEnabled;
+        private float cachedMeshLodTolerance;
+        private long nextMeshCacheAttempt;
 
         // Other actors' surfaces for weapon contacts only. A failed capture is kept as null so a
         // non-humanoid or unreadable model is not retried on every weapon drop.
         private const int MaxWeaponContactMeshes = 8;
-        internal readonly Dictionary<nint, (uint Entity, nint Draw, FrozenMeshGeometryCache? Cache)> weaponContactMeshes = new();
-        internal readonly List<nint> weaponContactMeshOrder = new();
+        private readonly Dictionary<nint, (uint Entity, nint Draw, FrozenMeshGeometryCache? Cache)> weaponContactMeshes = new();
+        private readonly List<nint> weaponContactMeshOrder = new();
+
+        // What the recording writes of the carried surfaces (format version 3).
+        internal FrozenMeshGeometryCache? FrozenMeshCache => frozenMeshCache;
+        internal nint FrozenMeshActor => frozenMeshActor;
+        internal uint FrozenMeshEntity => frozenMeshEntity;
+        internal int ObservedMeshCacheRevision => observedMeshCacheRevision;
+        internal bool ObservedMeshEnabled => observedMeshEnabled;
+        internal bool CachedMeshLodEnabled => cachedMeshLodEnabled;
+        internal float CachedMeshLodTolerance => cachedMeshLodTolerance;
+        internal long NextMeshCacheAttempt => nextMeshCacheAttempt;
+        internal Dictionary<nint, (uint Entity, nint Draw, FrozenMeshGeometryCache? Cache)> WeaponContactMeshes => weaponContactMeshes;
+        internal List<nint> WeaponContactMeshOrder => weaponContactMeshOrder;
 
         /// <summary>The rendered surface already cached for this actor; never captures for hair.</summary>
         internal FrozenMeshGeometryCache? CachedSurfaceFor(nint address)
@@ -94,7 +103,7 @@ public unsafe partial class Ragdoll
             if (frozenMeshCache == null && ctx.Clock.GetTickCount64(ClockSite.MeshCacheRetry) >= nextMeshCacheAttempt)
             {
                 nextMeshCacheAttempt = ctx.Clock.GetTickCount64(ClockSite.MeshCacheRetry) + 2000;
-                frozenMeshCache = ctx.Meshes.ProvideBodySurface(address, BodySurfaceUse.Frozen, () => ctx.Core.CaptureFrozenMeshCache(address));
+                frozenMeshCache = ctx.Meshes.ProvideBodySurface(address, BodySurfaceUse.Frozen, () => CaptureFrozenMeshCache(address));
                 cachedMeshLodTolerance = -1; // Queue LOD once for this capture, including prewarming.
             }
             if (frozenMeshCache == null) return;
@@ -127,12 +136,56 @@ public unsafe partial class Ragdoll
             }
             // Body status text belongs to this controller's own ragdoll, not to another actor's capture.
             var status = Status;
-            var cache = ctx.Meshes.ProvideBodySurface(address, BodySurfaceUse.WeaponContact, () => ctx.Core.CaptureFrozenMeshCache(address));
+            var cache = ctx.Meshes.ProvideBodySurface(address, BodySurfaceUse.WeaponContact, () => CaptureFrozenMeshCache(address));
             Status = status;
             if (cache != null) ctx.Meshes.ConfigureLod(cache, true, RagdollTuning.WeaponBodyMeshLodToleranceMm * .001f);
             weaponContactMeshes[address] = (entity, draw, cache);
             weaponContactMeshOrder.Add(address);
             return cache;
+        }
+
+        /// <summary>The rendered body of a character, partitioned into the rig's regions and frozen bone-local. The
+        /// mesh source runs this (<see cref="IMeshSource.ProvideBodySurface"/>); the models come from it too.</summary>
+        private FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address)
+        {
+            var skel = ctx.Skeletons.TryGetSkeleton(address);
+            if (skel == null) return null;
+            if (!skel.HasRoot) return null;
+            var defs = skeletonReader.GetBoneDefs();
+            var names = new Dictionary<string, int>();
+            var byName = new Dictionary<string, RagdollBoneDef>();
+            foreach (var def in defs)
+            {
+                var index = ResolveBoneIndex(skel, def.Name);
+                if (index < 0) continue;
+                names[def.Name] = index; byName[def.Name] = def;
+            }
+            if (!skeletonReader.IsHumanoidSkeleton(names)) return null;
+            FrozenMeshGeometryCache? next = null;
+            try
+            {
+                if (ctx.Settings.RagdollSoftTissueModBones && address == ctx.Actors.LocalPlayer)
+                    skeletonReader.AppendModSoftTissueDefs(skel, defs, names, byName);
+                var worldParts = CaptureBodyMeshVolumes(address, skel, byName, names);
+                if (worldParts.Count == 0) return null;
+                next = new();
+                var root = skel.Root;
+                var rootPosition = new Vector3(root.Position.X, root.Position.Y, root.Position.Z);
+                var rootRotation = Quaternion.Normalize(new(root.Rotation.X, root.Rotation.Y, root.Rotation.Z, root.Rotation.W));
+                var scale = ctx.GetCharacterScale(address, skel);
+                foreach (var entry in names)
+                {
+                    if (!worldParts.TryGetValue(entry.Value, out var geometry)) continue;
+                    ref var pose = ref skel.ModelPose[entry.Value];
+                    var origin = rootPosition + Vector3.Transform(new Vector3(pose.Translation.X, pose.Translation.Y, pose.Translation.Z) * scale, rootRotation);
+                    var rotation = Quaternion.Normalize(rootRotation * new Quaternion(pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W));
+                    next.Add(entry.Key, geometry, origin, rotation);
+                }
+                var result = next; next = null;
+                ctx.Log.Info($"Frozen collision cache loaded for 0x{address:X}: {result.Count} regions; reused until explicit refresh or actor change.");
+                return result;
+            }
+            finally { next?.Dispose(); }
         }
 
         private void PollWeaponContactMeshes()
@@ -177,49 +230,5 @@ public unsafe partial class Ragdoll
                 weaponContactMeshOrder.Add(entry.Actor);
             }
         }
-    }
-
-    /// <summary>The rendered body of a character, partitioned into the rig's regions and frozen bone-local. The
-    /// mesh source runs this (<see cref="IMeshSource.ProvideBodySurface"/>); the models come from it too.</summary>
-    private FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address)
-    {
-        var skel = skeletons.TryGetSkeleton(address);
-        if (skel == null) return null;
-        if (!skel.HasRoot) return null;
-        var defs = GetBoneDefs();
-        var names = new Dictionary<string, int>();
-        var byName = new Dictionary<string, RagdollBoneDef>();
-        foreach (var def in defs)
-        {
-            var index = ResolveBoneIndex(skel, def.Name);
-            if (index < 0) continue;
-            names[def.Name] = index; byName[def.Name] = def;
-        }
-        if (!IsHumanoidSkeleton(names)) return null;
-        FrozenMeshGeometryCache? next = null;
-        try
-        {
-            if (settings.RagdollSoftTissueModBones && address == actors.LocalPlayer)
-                AppendModSoftTissueDefs(skel, defs, names, byName);
-            var worldParts = CaptureBodyMeshVolumes(address, skel, byName, names);
-            if (worldParts.Count == 0) return null;
-            next = new();
-            var root = skel.Root;
-            var rootPosition = new Vector3(root.Position.X, root.Position.Y, root.Position.Z);
-            var rootRotation = Quaternion.Normalize(new(root.Rotation.X, root.Rotation.Y, root.Rotation.Z, root.Rotation.W));
-            var scale = GetCharacterScale(address, skel);
-            foreach (var entry in names)
-            {
-                if (!worldParts.TryGetValue(entry.Value, out var geometry)) continue;
-                ref var pose = ref skel.ModelPose[entry.Value];
-                var origin = rootPosition + Vector3.Transform(new Vector3(pose.Translation.X, pose.Translation.Y, pose.Translation.Z) * scale, rootRotation);
-                var rotation = Quaternion.Normalize(rootRotation * new Quaternion(pose.Rotation.X, pose.Rotation.Y, pose.Rotation.Z, pose.Rotation.W));
-                next.Add(entry.Key, geometry, origin, rotation);
-            }
-            var result = next; next = null;
-            log.Info($"Frozen collision cache loaded for 0x{address:X}: {result.Count} regions; reused until explicit refresh or actor change.");
-            return result;
-        }
-        finally { next?.Dispose(); }
     }
 }

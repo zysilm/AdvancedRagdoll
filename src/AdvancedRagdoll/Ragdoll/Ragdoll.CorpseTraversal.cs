@@ -112,20 +112,14 @@ public unsafe partial class Ragdoll
         }
     }
 
-
     // Corpse traversal (Ragdoll.CorpseTraversal.cs).
     private readonly CorpseTraversal corpseTraversal;
 
-    private Dictionary<nint, NpcTraversalAnchor> npcTraversalAnchors => corpseTraversal.Anchors;
     // Finite-mass foot carriers for autonomous swarm traversal (the narrow phase's traversal dynamics).
     private HashSet<int> npcTraversalDynamicBodyHandles => corpseTraversal.DynamicBodyHandles;
     private object npcTraversalProxySync => corpseTraversal.ProxySync;
     private Dictionary<nint, NpcTraversalProxyRequest> npcTraversalProxyRequests => corpseTraversal.ProxyRequests;
-    private bool npcTraversalProxyActivityThisFrame
-    {
-        get => corpseTraversal.ProxyActivityThisFrame;
-        set => corpseTraversal.ProxyActivityThisFrame = value;
-    }
+    private bool npcTraversalProxyActivityThisFrame => corpseTraversal.ProxyActivityThisFrame;
 
     /// <summary>
     /// Temporarily scale dynamic ragdoll mass/inertia for kinematic traversal contacts. This is not
@@ -315,15 +309,12 @@ public unsafe partial class Ragdoll
         private readonly Dictionary<nint, NpcTraversalProxy> npcTraversalProxies = new();
         private bool npcTraversalProxyActivityThisFrame;
 
-        internal Dictionary<nint, NpcTraversalAnchor> Anchors => npcTraversalAnchors;
-        internal List<FaceTraversalLandmark> FaceLandmarks => faceTraversalLandmarks;
         internal HashSet<int> DynamicBodyHandles => npcTraversalDynamicBodyHandles;
         internal object ProxySync => npcTraversalProxySync;
         internal Dictionary<nint, NpcTraversalProxyRequest> ProxyRequests => npcTraversalProxyRequests;
         internal bool ProxyActivityThisFrame
         {
             get => npcTraversalProxyActivityThisFrame;
-            set => npcTraversalProxyActivityThisFrame = value;
         }
 
         private const float NpcTraversalAnchorGraceSeconds = 0.12f;

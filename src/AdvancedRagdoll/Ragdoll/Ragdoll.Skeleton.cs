@@ -23,7 +23,7 @@ public unsafe partial class Ragdoll
 
     // a6-8: the definitions of the active rig and the severed-limb selection live in the skeleton reader.
     private Dictionary<string, RagdollBoneDef> activeDefByName => skeletonReader.ActiveDefByName;
-    private ref bool useLocalDismemberBones => ref skeletonReader.UseLocalDismemberBones;
+    private bool useLocalDismemberBones => skeletonReader.UseLocalDismemberBones;
     private List<string> localDismemberBones => skeletonReader.LocalDismemberBones;
 
     private RagdollBoneDef[] GetBoneDefs() => skeletonReader.GetBoneDefs();
@@ -53,8 +53,8 @@ public unsafe partial class Ragdoll
     /// Reads the host skeleton into the rig's bone definitions (the profile's humanoid set, a generated set for a
     /// non-humanoid skeleton, the soft-tissue bones discovered on it, the limbs left out when severed) and keeps the
     /// definitions the active rig was built from and the severed-limb selection. A component (docs/ARCHITECTURE.md
-    /// §8). The rig build fills <see cref="ActiveDefByName"/>; the stateless bone-class and profile-default helpers
-    /// below stay static on the ragdoll.
+    /// §8). The rig build sets the active definitions (<see cref="SetActiveDefs"/>); the stateless bone-class and
+    /// profile-default helpers below stay static on the ragdoll.
     /// </summary>
     private sealed class SkeletonReader
     {
@@ -77,7 +77,7 @@ public unsafe partial class Ragdoll
         private readonly List<string> localDismemberBones = new();
 
         internal Dictionary<string, RagdollBoneDef> ActiveDefByName => activeDefByName;
-        internal ref bool UseLocalDismemberBones => ref useLocalDismemberBones;
+        internal bool UseLocalDismemberBones => useLocalDismemberBones;
         internal List<string> LocalDismemberBones => localDismemberBones;
 
         /// <summary>
@@ -517,6 +517,15 @@ public unsafe partial class Ragdoll
 
         /// <summary>Deactivation: the active rig's definitions go.</summary>
         internal void ClearActiveDefs() => activeDefByName.Clear();
+
+        /// <summary>The rig build: the definitions the active rig is built from (human or generated), so the step reads
+        /// capsule extents from the set actually in use.</summary>
+        internal void SetActiveDefs(RagdollBoneDef[] defs)
+        {
+            activeDefByName.Clear();
+            foreach (var def in defs)
+                activeDefByName[def.Name] = def;
+        }
 
         /// <summary>Deactivation: the severed-limb selection goes.</summary>
         internal void ClearSeveredSelection()

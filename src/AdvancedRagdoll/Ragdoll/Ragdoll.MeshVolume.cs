@@ -15,9 +15,9 @@ public unsafe partial class Ragdoll
     // The body's rendered-mesh collision: the frozen surface caches, the mesh bodies built from them and their
     // stepping (Ragdoll.MeshVolume.cs, .MeshCache.cs, .MeshDeformation.cs, .MeshExecution.cs).
     private readonly MeshVolumes meshVolumes;
-    private bool activeRagdollMeshVolumes { get => meshVolumes.Active; set => meshVolumes.Active = value; }
+    private bool activeRagdollMeshVolumes => meshVolumes.Active;
     internal int MeshGeometryGeneration => externalBodyGeneration;
-    internal string MeshGeometryStatus { get => meshVolumes.Status; private set => meshVolumes.Status = value; }
+    internal string MeshGeometryStatus => meshVolumes.Status;
 
     internal bool IsMeshBody(string boneName)
     {
@@ -53,97 +53,42 @@ public unsafe partial class Ragdoll
         return true;
     }
 
-    private Dictionary<int, BodyMeshGeometry> CaptureBodyMeshVolumes(nint address, IHostSkeleton skel,
-        IReadOnlyDictionary<string, RagdollBoneDef> definitions,
-        IReadOnlyDictionary<string, int> activeIndices)
-    {
-        var empty = new Dictionary<int, BodyMeshGeometry>();
-        try
-        {
-            var source = meshes.CaptureRenderedGeometry(address, skel);
-            foreach (var diagnostic in source.Diagnostics) log.Info($"Ragdoll rendered mesh: {diagnostic}");
-            if (source.TriangleIndices.Length == 0)
-            {
-                MeshGeometryStatus = "Rendered geometry unavailable; explicit legacy fallback (see log)";
-                return empty;
-            }
-            if (source.TriangleIndices.Length / 3 > 100000)
-                throw new InvalidOperationException("Rendered body exceeds the 100000 source-face budget; exact geometry was not decimated.");
-            var byIndex = new Dictionary<int, RagdollBoneDef>();
-            foreach (var entry in activeIndices)
-                if (definitions.TryGetValue(entry.Key, out var definition)) byIndex[entry.Value] = definition;
-            var omittedRoots = new HashSet<int>();
-            var severed = useLocalDismemberBones ? localDismemberBones : settings.DismemberPocBones;
-            if (severed != null)
-                foreach (var name in severed)
-                {
-                    var root = ResolveBoneIndex(skel, name);
-                    if (root < 0) continue;
-                    var keptDescendant = false;
-                    foreach (var index in activeIndices.Values)
-                        if (IsDescendantOrSelf(skel, index, root)) { keptDescendant = true; break; }
-                    if (!keptDescendant) omittedRoots.Add(root);
-                }
-            int Owner(int bone)
-            {
-                int steps = 0;
-                while (bone >= 0 && bone < skel.ParentCount && steps++ < skel.BoneCount)
-                {
-                    // A severed limb must not be reassigned to the chest/pelvis just because
-                    // its bodies were removed before the visual scale masks were applied.
-                    if (omittedRoots.Contains(bone)) return -1;
-                    if (byIndex.TryGetValue(bone, out var def) &&
-                        (!def.SoftBody || settings.RagdollSoftTissueCollision) &&
-                        !skeletonProfile.Classes.Cloth.Matches(def.Name) &&
-                        !skeletonProfile.Classes.Weapon.Matches(def.Name)) return bone;
-                    bone = skel.Parent(bone);
-                }
-                return -1;
-            }
-            var vertices = new MeshWeightedVertex[source.Vertices.Length];
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                var weights = new Dictionary<int, float>();
-                foreach (var influence in source.Vertices[i].Influences)
-                {
-                    var owner = Owner(influence.BoneIndex);
-                    if (owner < 0) continue;
-                    weights[owner] = weights.GetValueOrDefault(owner) + influence.Weight;
-                }
-                var mapped = new MeshBodyWeight[weights.Count];
-                int j = 0; float sum = 0f;
-                foreach (var value in weights.Values) sum += value;
-                foreach (var pair in weights)
-                    mapped[j++] = new MeshBodyWeight(pair.Key, sum > 0f ? pair.Value / sum : 0f);
-                vertices[i] = new MeshWeightedVertex(source.Vertices[i].WorldPosition, mapped);
-            }
-            var parts = BodyMeshPartitioner.Partition(vertices, source.TriangleIndices);
-            MeshGeometryStatus = $"Captured frozen mesh: {parts.Count} body regions, {source.TriangleIndices.Length / 3} source faces";
-            log.Info($"Ragdoll mesh volume: {MeshGeometryStatus}");
-            return parts;
-        }
-        catch (Exception ex)
-        {
-            MeshGeometryStatus = "Rendered geometry failed; explicit legacy fallback (see log)";
-            log.Warning(ex, "Ragdoll mesh volume capture failed; preserving legacy geometry.");
-            return empty;
-        }
-    }
-
     /// <summary>
     /// The body's rendered-mesh collision: the frozen bone-local surfaces this controller caches (its own target and,
-    /// for weapon contacts, other actors), the triangle-mesh bodies built from them at activation, the collision LODs
-    /// swapped in while stepping, and the worker lease and timing of the mesh steps. A component
-    /// (docs/ARCHITECTURE.md §8).
+    /// for weapon contacts, other actors) and their capture from the rendered body, the triangle-mesh bodies built from
+    /// them at activation, the collision LODs swapped in while stepping, the worker lease and timing of the mesh steps,
+    /// and the mesh status text. It captures a surface with the skeleton reader's bone definitions and severed-limb
+    /// selection (an explicit dependency, handed in). A component (docs/ARCHITECTURE.md §8).
     /// </summary>
     private sealed partial class MeshVolumes
     {
         private readonly SimulationContext ctx;
-        internal MeshVolumes(SimulationContext ctx) { this.ctx = ctx; }
+        // The bone definitions and the severed-limb selection a body surface is captured with.
+        private readonly SkeletonReader skeletonReader;
 
-        /// <summary>Mesh volumes were on when the active rig was built.</summary>
-        internal bool Active;
-        internal string Status = "No rendered mesh captured";
+        internal MeshVolumes(SimulationContext ctx, SkeletonReader skeletonReader)
+        {
+            this.ctx = ctx;
+            this.skeletonReader = skeletonReader;
+        }
+
+        // Mesh volumes were on when the active rig was built, and the cache revision it was built with.
+        private bool active;
+        private int activeMeshCacheRevision;
+        internal bool Active => active;
+        internal int ActiveMeshCacheRevision => activeMeshCacheRevision;
+        /// <summary>The mesh status text of this controller's own ragdoll.</summary>
+        internal string Status { get; private set; } = "No rendered mesh captured";
+
+        /// <summary>The rig build: whether mesh volumes are on for this rig, and the cache revision.</summary>
+        internal void BeginRig(bool meshVolumesOn, int cacheRevision)
+        {
+            active = meshVolumesOn;
+            activeMeshCacheRevision = cacheRevision;
+        }
+
+        internal void SetStatus(string status) => Status = status;
+        internal void AppendStatus(string text) => Status += text;
 
         internal Dictionary<int, BodyMeshGeometry> BuildBodyMeshVolumes(IHostSkeleton skel,
             IReadOnlyDictionary<string, RagdollBoneDef> definitions,
@@ -215,6 +160,83 @@ public unsafe partial class Ragdoll
                 else if (triangles.Allocated) ctx.BufferPool.Return(ref triangles);
                 ctx.Log.Warning(ex, "Ragdoll body mesh rejected; preserving legacy shape for this region.");
                 return false;
+            }
+        }
+
+        private Dictionary<int, BodyMeshGeometry> CaptureBodyMeshVolumes(nint address, IHostSkeleton skel,
+            IReadOnlyDictionary<string, RagdollBoneDef> definitions,
+            IReadOnlyDictionary<string, int> activeIndices)
+        {
+            var empty = new Dictionary<int, BodyMeshGeometry>();
+            try
+            {
+                var source = ctx.Meshes.CaptureRenderedGeometry(address, skel);
+                foreach (var diagnostic in source.Diagnostics) ctx.Log.Info($"Ragdoll rendered mesh: {diagnostic}");
+                if (source.TriangleIndices.Length == 0)
+                {
+                    Status = "Rendered geometry unavailable; explicit legacy fallback (see log)";
+                    return empty;
+                }
+                if (source.TriangleIndices.Length / 3 > 100000)
+                    throw new InvalidOperationException("Rendered body exceeds the 100000 source-face budget; exact geometry was not decimated.");
+                var byIndex = new Dictionary<int, RagdollBoneDef>();
+                foreach (var entry in activeIndices)
+                    if (definitions.TryGetValue(entry.Key, out var definition)) byIndex[entry.Value] = definition;
+                var omittedRoots = new HashSet<int>();
+                var severed = skeletonReader.UseLocalDismemberBones ? skeletonReader.LocalDismemberBones : ctx.Settings.DismemberPocBones;
+                if (severed != null)
+                    foreach (var name in severed)
+                    {
+                        var root = ResolveBoneIndex(skel, name);
+                        if (root < 0) continue;
+                        var keptDescendant = false;
+                        foreach (var index in activeIndices.Values)
+                            if (IsDescendantOrSelf(skel, index, root)) { keptDescendant = true; break; }
+                        if (!keptDescendant) omittedRoots.Add(root);
+                    }
+                int Owner(int bone)
+                {
+                    int steps = 0;
+                    while (bone >= 0 && bone < skel.ParentCount && steps++ < skel.BoneCount)
+                    {
+                        // A severed limb must not be reassigned to the chest/pelvis just because
+                        // its bodies were removed before the visual scale masks were applied.
+                        if (omittedRoots.Contains(bone)) return -1;
+                        if (byIndex.TryGetValue(bone, out var def) &&
+                            (!def.SoftBody || ctx.Settings.RagdollSoftTissueCollision) &&
+                            !ctx.Profile.Classes.Cloth.Matches(def.Name) &&
+                            !ctx.Profile.Classes.Weapon.Matches(def.Name)) return bone;
+                        bone = skel.Parent(bone);
+                    }
+                    return -1;
+                }
+                var vertices = new MeshWeightedVertex[source.Vertices.Length];
+                for (int i = 0; i < vertices.Length; i++)
+                {
+                    var weights = new Dictionary<int, float>();
+                    foreach (var influence in source.Vertices[i].Influences)
+                    {
+                        var owner = Owner(influence.BoneIndex);
+                        if (owner < 0) continue;
+                        weights[owner] = weights.GetValueOrDefault(owner) + influence.Weight;
+                    }
+                    var mapped = new MeshBodyWeight[weights.Count];
+                    int j = 0; float sum = 0f;
+                    foreach (var value in weights.Values) sum += value;
+                    foreach (var pair in weights)
+                        mapped[j++] = new MeshBodyWeight(pair.Key, sum > 0f ? pair.Value / sum : 0f);
+                    vertices[i] = new MeshWeightedVertex(source.Vertices[i].WorldPosition, mapped);
+                }
+                var parts = BodyMeshPartitioner.Partition(vertices, source.TriangleIndices);
+                Status = $"Captured frozen mesh: {parts.Count} body regions, {source.TriangleIndices.Length / 3} source faces";
+                ctx.Log.Info($"Ragdoll mesh volume: {Status}");
+                return parts;
+            }
+            catch (Exception ex)
+            {
+                Status = "Rendered geometry failed; explicit legacy fallback (see log)";
+                ctx.Log.Warning(ex, "Ragdoll mesh volume capture failed; preserving legacy geometry.");
+                return empty;
             }
         }
 

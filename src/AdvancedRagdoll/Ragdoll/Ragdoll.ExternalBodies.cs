@@ -177,14 +177,13 @@ public unsafe partial class Ragdoll
     // The bodies and rigs added from outside (Ragdoll.ExternalBodies.cs).
     private readonly ExternalBodies external;
 
-    private int externalBodyGeneration { get => external.Generation; set => external.Generation = value; }
+    private int externalBodyGeneration => external.Generation;
     private List<ExternalBodyHandle> externalBodies => external.BodyList;
     private List<ExternalRigHandle> externalRigs => external.Rigs;
     private HashSet<int> externalDynamicBodyHandles => external.DynamicBodyHandles;
     private HashSet<int> externalRigDynamicBodyHandles => external.RigDynamicBodyHandles;
     private HashSet<int> externalRigNoRagdollContactBodyHandles => external.RigNoRagdollContactBodyHandles;
     private HashSet<(int, int)> externalRigConnectedPairs => external.RigConnectedPairs;
-    private List<ExternalRigHandle> carriedRigs => external.CarriedRigs;
 
     private bool TryCreateExternalDynamicBodyCore(IReadOnlyList<ExternalShapePart> parts, float mass,
         Vector3 position, Quaternion orientation, Vector3 linearVelocity, Vector3 angularVelocity,
@@ -366,13 +365,13 @@ public unsafe partial class Ragdoll
     /// </summary>
     private void CollectCarriedExternalRigs()
     {
-        carriedRigs.Clear();
+        external.ClearCarried();
         if (CarryExternalRigOnAnchor == null || simulation == null) return;
 
         foreach (var rig in externalRigs)
         {
             if (rig.Removed || rig.Generation != externalBodyGeneration) continue;
-            if (RecDecision("CarryExternalRigOnAnchor", CarryExternalRigOnAnchor(rig))) carriedRigs.Add(rig);
+            if (RecDecision("CarryExternalRigOnAnchor", CarryExternalRigOnAnchor(rig))) external.AddCarried(rig);
         }
     }
 
@@ -397,14 +396,13 @@ public unsafe partial class Ragdoll
         internal ExternalBodies(SimulationContext ctx) { this.ctx = ctx; }
 
         /// <summary>Bumped when the simulation is torn down; handles stamped with an older value are dead.</summary>
-        internal int Generation { get => externalBodyGeneration; set => externalBodyGeneration = value; }
+        internal int Generation => externalBodyGeneration;
         internal List<ExternalBodyHandle> BodyList => externalBodies;
         internal List<ExternalRigHandle> Rigs => externalRigs;
         internal HashSet<int> DynamicBodyHandles => externalDynamicBodyHandles;
         internal HashSet<int> RigDynamicBodyHandles => externalRigDynamicBodyHandles;
         internal HashSet<int> RigNoRagdollContactBodyHandles => externalRigNoRagdollContactBodyHandles;
         internal HashSet<(int, int)> RigConnectedPairs => externalRigConnectedPairs;
-        internal List<ExternalRigHandle> CarriedRigs => carriedRigs;
 
         /// <summary>Add one dynamic body (the caller checked the simulation is up). Throws on failure.</summary>
         internal BodyHandle AddDynamicBody(IReadOnlyList<ExternalShapePart> parts, float mass,
@@ -1093,6 +1091,11 @@ public unsafe partial class Ragdoll
 
         /// <summary>Simulation teardown, first step: handles stamped before now are dead.</summary>
         internal void BumpGeneration() => externalBodyGeneration++;
+
+        /// <summary>The worn rigs carried with the standing hold: collected anew for each anchor correction (the
+        /// owner's test is a recorded decision the ragdoll makes).</summary>
+        internal void ClearCarried() => carriedRigs.Clear();
+        internal void AddCarried(ExternalRigHandle rig) => carriedRigs.Add(rig);
 
         /// <summary>Simulation teardown: the bodies and rigs and the four contact filter sets. The carried rigs are
         /// not cleared here (as before).</summary>

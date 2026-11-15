@@ -30,7 +30,14 @@ public unsafe partial class Ragdoll
     private sealed partial class HairRig
     {
         private readonly SimulationContext ctx;
-        internal HairRig(SimulationContext ctx) { this.ctx = ctx; }
+        // The cached body surfaces the hair rests on (an explicit dependency, docs/ARCHITECTURE.md §8).
+        private readonly MeshVolumes meshVolumes;
+
+        internal HairRig(SimulationContext ctx, MeshVolumes meshVolumes)
+        {
+            this.ctx = ctx;
+            this.meshVolumes = meshVolumes;
+        }
 
         private sealed class HairRigChain
         {
