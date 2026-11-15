@@ -15,7 +15,7 @@ using AdvancedRagdoll.Recording;
 namespace AdvancedRagdoll.Hosting;
 
 // The recorder (stage A0) as decorators around the host interfaces it can observe from outside
-// (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §8): each passes the call through and, while the controller is
+// (docs/ARCHITECTURE.md §6): each passes the call through and, while the controller is
 // recording, writes the same record the controller used to write beside the call (A2a), or the product the
 // host answered (A2b: mesh products and the wall-clock stamps of format version 3). The skeleton captures,
 // the frames, the steps and the calls stay where they are in the controller: they are observation points

@@ -13,7 +13,7 @@ using BepuSimulation = BepuPhysics.Simulation;
 
 namespace AdvancedRagdoll.Bepu;
 
-// Extension points of the ragdoll (stage A3b, docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §7). They replaced two partial
+// Extension points of the ragdoll (docs/ARCHITECTURE.md §5). They replaced two partial
 // methods of RagdollController, which cannot cross an assembly boundary. No game types here (in the library since A4). Register with Ragdoll.AddExtension.
 // Internal for 0.1: only the plugin (InternalsVisibleTo) uses them; they are not a public API yet.
 

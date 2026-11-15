@@ -2,9 +2,9 @@
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
   <ItemGroup>
     <RuntimeHostConfigurationOption Include="System.Runtime.TieredCompilation" Value="false" />
-    <Compile Include="../../MeshVolume/BodyMeshGeometry.cs" Link="Production/BodyMeshGeometry.cs" />
-    <Compile Include="../../MeshVolume/SurfaceMeshBvh.cs" Link="Production/SurfaceMeshBvh.cs" />
-    <Compile Include="../../SurfaceProfiles/CharacterSurfaceProfile.cs" Link="Production/CharacterSurfaceProfile.cs" />
-    <Compile Include="../../SurfaceProfiles/CharacterSurfaceRuntime.cs" Link="Production/CharacterSurfaceRuntime.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/MeshVolume/BodyMeshGeometry.cs" Link="Production/BodyMeshGeometry.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/MeshVolume/SurfaceMeshBvh.cs" Link="Production/SurfaceMeshBvh.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/SurfaceProfiles/CharacterSurfaceProfile.cs" Link="Production/CharacterSurfaceProfile.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/SurfaceProfiles/CharacterSurfaceRuntime.cs" Link="Production/CharacterSurfaceRuntime.cs" />
   </ItemGroup>
 </Project>

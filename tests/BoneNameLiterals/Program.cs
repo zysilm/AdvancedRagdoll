@@ -16,7 +16,7 @@ using System.Text.RegularExpressions;
 var root = FindRoot(AppContext.BaseDirectory) ?? FindRoot(Directory.GetCurrentDirectory());
 if (root == null)
 {
-    Console.WriteLine("FAIL: repository root (AdvancedRagdoll.csproj) not found");
+    Console.WriteLine("FAIL: repository root (src/AdvancedRagdoll/AdvancedRagdoll.csproj) not found");
     return 2;
 }
 
@@ -135,7 +135,7 @@ if (denyList.Count != DenyList.ExpectedCount)
     return 2;
 }
 
-var coreFiles = sources.Count(f => f.StartsWith("Ragdoll.", StringComparison.Ordinal));
+var coreFiles = sources.Count(f => Path.GetFileName(f).StartsWith("Ragdoll.", StringComparison.Ordinal));
 Console.WriteLine($"scanned {sources.Count} library source files, of which {coreFiles} ragdoll core");
 if (coreFiles == 0)
 {
@@ -179,7 +179,7 @@ return 0;
 static string? FindRoot(string start)
 {
     for (var dir = new DirectoryInfo(start); dir != null; dir = dir.Parent)
-        if (File.Exists(Path.Combine(dir.FullName, "AdvancedRagdoll.csproj")))
+        if (File.Exists(Path.Combine(dir.FullName, "src", "AdvancedRagdoll", "AdvancedRagdoll.csproj")))
             return dir.FullName;
     return null;
 }

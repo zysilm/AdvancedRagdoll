@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- AdvancedRagdoll: ragdoll physics for .NET games on BepuPhysics. References BepuPhysics only. The public API is the
        Ragdoll constructor on AdvancedRagdoll.Hosting.RagdollHost and the skeleton profile types; everything else is
-       internal for 0.1. See README.md. -->
+       internal for 0.1. See README.md at the repository root. -->
   <PropertyGroup>
     <!-- BepuPhysics 2.5.0-beta.22 only targets net8.0, so that is the floor. -->
     <TargetFramework>net8.0</TargetFramework>
@@ -10,7 +10,9 @@
          project file name when it writes the plugin's deps.json. If the two differ, the DLL is listed
          there twice (once more as "AdvancedRagdoll.Reference"). Keep this equal to the project file name. -->
     <PackageId>AdvancedRagdoll</PackageId>
-    <!-- Folders mirror the namespaces below AdvancedRagdoll. -->
+    <!-- A folder named after a namespace below AdvancedRagdoll (Hosting, MeshVolume, WeaponDrop, ...) holds that
+         namespace. The others only group files of the root namespace AdvancedRagdoll by topic: Ragdoll (the partial
+         files of the Ragdoll class), Rig, Activation, World, Rendering and Gear. -->
     <RootNamespace>AdvancedRagdoll</RootNamespace>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -41,10 +43,8 @@
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
   <ItemGroup>
-    <!-- The sample and tests live under tests/ with their own projects. -->
-    <Compile Remove="tests/**" />
-    <None Remove="tests/**" />
-    <None Include="README.md" Pack="true" PackagePath="\" />
+    <!-- The sample and tests live in tests/ at the repository root, with their own projects. -->
+    <None Include="../../README.md" Pack="true" PackagePath="\" Link="README.md" />
   </ItemGroup>
   <ItemGroup>
     <!-- Must stay the exact version the plugin references; pinned exactly ([x]) so the package does not float to a

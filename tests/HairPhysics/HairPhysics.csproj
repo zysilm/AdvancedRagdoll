@@ -7,13 +7,13 @@
     <!-- Keep warmed allocation/timing fixtures independent of tiered-JIT
          transitions. This affects this offline executable only. -->
     <RuntimeHostConfigurationOption Include="System.Runtime.TieredCompilation" Value="false" />
-    <Compile Include="../../Hair/FlexibleHairSolver.cs" Link="Production/FlexibleHairSolver.cs" />
-    <Compile Include="../../Hair/HairMeshEnvelope.cs" Link="Production/HairMeshEnvelope.cs" />
-    <Compile Include="../../Hair/HairMeshSample.cs" Link="Production/HairMeshSample.cs" />
-    <Compile Include="../../Hair/HairInputTiming.cs" Link="Production/HairInputTiming.cs" />
-    <Compile Include="../../MeshVolume/PosedSurfaceRegion.cs" Link="Production/PosedSurfaceRegion.cs" />
-    <Compile Include="../../MeshVolume/SurfaceSmoothing.cs" Link="Production/SurfaceSmoothing.cs" />
-    <Compile Include="../../MeshVolume/BodyMeshGeometry.cs" Link="Production/BodyMeshGeometry.cs" />
-    <Compile Include="../../MeshVolume/SurfaceMeshBvh.cs" Link="Production/SurfaceMeshBvh.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/Hair/FlexibleHairSolver.cs" Link="Production/FlexibleHairSolver.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/Hair/HairMeshEnvelope.cs" Link="Production/HairMeshEnvelope.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/Hair/HairMeshSample.cs" Link="Production/HairMeshSample.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/Hair/HairInputTiming.cs" Link="Production/HairInputTiming.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/MeshVolume/PosedSurfaceRegion.cs" Link="Production/PosedSurfaceRegion.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/MeshVolume/SurfaceSmoothing.cs" Link="Production/SurfaceSmoothing.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/MeshVolume/BodyMeshGeometry.cs" Link="Production/BodyMeshGeometry.cs" />
+    <Compile Include="../../src/AdvancedRagdoll/MeshVolume/SurfaceMeshBvh.cs" Link="Production/SurfaceMeshBvh.cs" />
   </ItemGroup>
 </Project>

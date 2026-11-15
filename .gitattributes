@@ -3,3 +3,5 @@
 *.csproj text eol=crlf
 *.md text eol=crlf
 *.yml text eol=lf
+# Golden outputs are compared byte for byte: never convert their line ends.
+tests/WeaponDropGolden/Golden/*.txt -text

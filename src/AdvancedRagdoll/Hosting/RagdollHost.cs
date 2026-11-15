@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 
 namespace AdvancedRagdoll.Hosting;
 
-// The public host API (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §2.3, stage A7): what a game gives a Ragdoll. Conventions:
+// The public host API (docs/ARCHITECTURE.md §2): what a game gives a Ragdoll. Conventions:
 // world Y up, metres, seconds, radians, System.Numerics; poses are in model space (relative to the skeleton root),
 // the root transform maps model space to world space. Characters are identified by an opaque ActorId. Nothing here
 // exposes a BepuPhysics type (the advanced extension points live in AdvancedRagdoll.Bepu).
@@ -140,7 +140,7 @@ public enum RagdollWaterMode
 }
 
 /// <summary>
-/// The settings a ragdoll takes once per activation (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §6): taken from
+/// The settings a ragdoll takes once per activation (docs/ARCHITECTURE.md §4): taken from
 /// <see cref="IRagdollSettingsSource.Capture"/> when <see cref="Ragdoll.Activate"/> is called and unchanged until the
 /// next activation.
 /// </summary>

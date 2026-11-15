@@ -1,7 +1,7 @@
 # Ragdoll recording: reader and checker
 
 A host can record its ragdoll runs: each ragdoll activation writes one `.rgdrec` file. This project reads those
-files offline. It links the production format code from `Recording/` and the library's exact BepuPhysics package.
+files offline. It links the production format code from `src/AdvancedRagdoll/Recording/` and the library's exact BepuPhysics package.
 
 ```
 dotnet run -c Release                          # self-checks (exit code 0 = all passed)

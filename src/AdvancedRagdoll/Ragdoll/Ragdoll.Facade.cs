@@ -32,7 +32,7 @@ public enum RagdollPhase
     Resting,
 }
 
-// The public face of Ragdoll (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §2.3, stage A7): a constructor on the public host
+// The public face of Ragdoll (docs/ARCHITECTURE.md §2): a constructor on the public host
 // API and the Activate / Step / WritePose / Deactivate cycle. It drives the same ragdoll the plugin drives,
 // through adapters onto the internal host services (FacadeHost below): an ActorId is mapped to an opaque id, the
 // skeleton is read into a buffer once per step and written back from it in WritePose, the frame time is the dt
@@ -46,7 +46,7 @@ public unsafe partial class Ragdoll
     /// A ragdoll for one character. <paramref name="profile"/> names the skeleton's bones and carries the hand-tuned
     /// humanoid tables; a skeleton without the profile's signature bones (or any skeleton, with
     /// <see cref="SkeletonProfile.Auto"/>) gets a rig generated from its own bones. Not thread-safe: call every member
-    /// from one thread (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §2.2).
+    /// from one thread (docs/ARCHITECTURE.md §2.2).
     /// </summary>
     public Ragdoll(RagdollHost host, SkeletonProfile profile)
         : this(FacadeHost.Create(host), profile)

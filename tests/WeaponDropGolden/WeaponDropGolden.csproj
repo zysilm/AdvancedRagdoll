@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Golden-output test of the dropped-weapon simulation (WeaponDrop/). It compiles every library source file, so it
+       drives the simulation through its internal host interfaces. See README.md.
+       Run: dotnet run -c Release   (exit code 0 = every scenario identical to Golden/). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>$(NoWarn);CS8618;CS8600;CS8601;CS8602;CS8603;CS8604;CS8625;CS0168;CS0169;CS0219;CS0414;CS0649</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The library's exact BepuPhysics package. -->
+    <PackageReference Include="BepuPhysics" Version="2.5.0-beta.22" />
+    <Compile Include="../../src/AdvancedRagdoll/**/*.cs" Exclude="../../src/AdvancedRagdoll/bin/**;../../src/AdvancedRagdoll/obj/**" Link="Production/%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="../Fixtures/TestHumanoid.cs" Link="Fixtures/TestHumanoid.cs" />
+  </ItemGroup>
+</Project>

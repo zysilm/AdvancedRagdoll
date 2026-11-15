@@ -101,6 +101,11 @@ start of every step (water, verbose logging). Without one, the defaults apply.
 The library has extension points that reach into the BepuPhysics simulation (a step hook and a contact hook). In 0.1
 they are internal: not part of the public API, and not covered by any compatibility promise when they open up.
 
+## Repository
+
+The library's source is in `src/AdvancedRagdoll/`, the sample and the offline tests (each its own project) in `tests/`,
+and notes on how the library is put together in `docs/ARCHITECTURE.md`.
+
 ## License
 
 [Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/). You may use the library from closed-source code; if you

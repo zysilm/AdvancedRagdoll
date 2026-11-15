@@ -7,7 +7,7 @@ using System.Collections.Generic;
 namespace AdvancedRagdoll.Hosting;
 
 /// <summary>
-/// The settings the ragdoll reads (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §6), one copy per controller,
+/// The settings the ragdoll reads (docs/ARCHITECTURE.md §4), one copy per controller,
 /// refreshed once at the start of every render frame from <see cref="IHostSettingsSource"/>. Everything
 /// in the frame, the physics worker threads included, reads this copy; a setting changed in the middle of
 /// a frame takes effect at the next one. Never saved: the user's configuration stays with the host (the

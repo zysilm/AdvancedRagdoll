@@ -7,7 +7,7 @@ using System;
 namespace AdvancedRagdoll.Recording;
 
 /// <summary>
-/// The on-disk format of a ragdoll recording (docs/REFACTOR_PLAN.md, stage A0).
+/// The on-disk format of a ragdoll recording (docs/ARCHITECTURE.md §6).
 ///
 /// A file is: 8 bytes of <see cref="Magic"/>, then records until the end of the file. A record is
 /// <c>[u16 type][u32 payload length][payload]</c>, little-endian. A payload is a flat sequence of

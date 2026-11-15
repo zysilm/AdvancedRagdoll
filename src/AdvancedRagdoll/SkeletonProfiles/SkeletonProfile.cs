@@ -14,7 +14,7 @@ namespace AdvancedRagdoll.SkeletonProfiles;
 /// the bodies and joints to build for it, its ranges of motion and mass budget, the bones it is
 /// recognised by, and the tuning of its class. Immutable. The ragdoll code asks the profile for
 /// "the pelvis", "the hand bones", "the left thigh" instead of naming bones itself
-/// (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §5).
+/// (docs/ARCHITECTURE.md §3).
 ///
 /// A host provides a profile for the skeletons it knows (the plugin ships its own humanoid profile).
 /// <see cref="Auto"/> stands for the rig generated from a skeleton's own topology, used when the

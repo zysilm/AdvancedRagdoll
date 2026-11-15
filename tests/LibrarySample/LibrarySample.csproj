@@ -8,6 +8,6 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\AdvancedRagdoll.csproj" />
+    <ProjectReference Include="..\..\src\AdvancedRagdoll\AdvancedRagdoll.csproj" />
   </ItemGroup>
 </Project>

@@ -13,7 +13,7 @@ using AdvancedRagdoll.Hosting;
 namespace AdvancedRagdoll.Recording;
 
 /// <summary>
-/// Switch and bookkeeping for ragdoll recordings (docs/REFACTOR_PLAN.md, stage A0). While a session
+/// Switch and bookkeeping for ragdoll recordings (docs/ARCHITECTURE.md §6). While a session
 /// is on, every ragdoll activation writes its own file under the plugin configuration directory,
 /// sub-folder <c>ragdoll-rec/</c>. Controlled by <c>/combatsim ragdollrec start|stop|status</c>;
 /// there is no setting and no UI. Off by default and after every plugin load.

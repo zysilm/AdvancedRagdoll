@@ -21,7 +21,7 @@ using BepuSimulation = BepuPhysics.Simulation;
 namespace AdvancedRagdoll;
 
 /// <summary>
-/// The ragdoll of one character (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md). A game makes it on the public host API
+/// The ragdoll of one character (docs/ARCHITECTURE.md). A game makes it on the public host API
 /// (<see cref="RagdollHost"/>) and drives it with <see cref="Activate(in RagdollActivation)"/>, <see cref="Step"/>,
 /// <see cref="WritePose"/> and <see cref="Deactivate"/> (Ragdoll.Facade.cs). Inside, everything it asks of the game
 /// goes through the internal host services (<see cref="RagdollHostServices"/>); trusted hosts (the plugin's
@@ -30,8 +30,8 @@ namespace AdvancedRagdoll;
 /// </summary>
 public unsafe partial class Ragdoll : IDisposable
 {
-    // Everything the controller asks of the game goes through these host services (Hosting/, stages A2a and A2b
-    // of docs/REFACTOR_PLAN.md).
+    // Everything the controller asks of the game goes through these host services (Hosting/; docs/ARCHITECTURE.md
+    // §2).
     private readonly RagdollHostServices host;
     private readonly IHostSkeletonSource skeletons;
     // The character models: every mesh the controller uses comes from here, as a finished product.
@@ -209,7 +209,7 @@ public unsafe partial class Ragdoll : IDisposable
     private bool useLocalDismemberBones;
     private readonly List<string> localDismemberBones = new();
 
-    // The skeleton profile (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §5): which bone plays which part,
+    // The skeleton profile (docs/ARCHITECTURE.md §3): which bone plays which part,
     // the bone table, ranges of motion, mass budget and the rest. The named bones (landmarks, bone
     // classes) always come from the humanoid profile, as the literal names did before, whatever rig
     // is active; only the per-class tuning switches to SkeletonProfile.Auto() for a generated rig.

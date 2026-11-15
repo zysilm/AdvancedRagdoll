@@ -17,13 +17,13 @@ using AdvancedRagdoll.Recording;
 
 namespace AdvancedRagdoll;
 
-// Read-only recorder for one ragdoll activation (docs/REFACTOR_PLAN.md, stage A0).
+// Read-only recorder for one ragdoll activation (docs/ARCHITECTURE.md §6).
 //
 // Everything here only observes. `rec` is null unless a recording session was on when the ragdoll
 // was activated, so each call site in the controller costs one null check. The helpers below read
 // the same game memory the surrounding code reads at that moment, never throw into the caller, and
 // write records in the order things happen. The format is described in
-// AdvancedRagdoll/Recording/RagdollRecordingFormat.cs.
+// Recording/RagdollRecordingFormat.cs.
 public unsafe partial class Ragdoll
 {
     private static int recNextControllerId;

@@ -14,13 +14,13 @@ using AdvancedRagdoll.Recording;
 
 namespace AdvancedRagdoll.Hosting;
 
-// What the ragdoll asks of its host (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §2.3, stages A2a and A2b).
+// What the ragdoll asks of its host (docs/ARCHITECTURE.md §2).
 //
 // These are the internal host services the ragdoll core is written against (stage A2a made them in the plugin
 // assembly; stage A4 moved them into the library unchanged). They keep every memory access and every float operation
 // exactly as it was: characters are identified by an opaque native-sized id (the plugin host passes the game object
 // address), and a skeleton hands out its model pose as a writable span over the live pose. The public host API of
-// docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §2.3 (ActorId, batch pose read and write) is the facade in RagdollHost.cs,
+// docs/ARCHITECTURE.md §2 (ActorId, batch pose read and write) is the facade in RagdollHost.cs,
 // which adapts onto these (stage A7). Hosts inside the trusted assemblies (the plugin, the replay) use these
 // directly.
 
@@ -267,10 +267,10 @@ internal enum CachedLodUse
 }
 
 /// <summary>
-/// The character models, as the ragdoll needs them (docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §2.3, stage A2b). The
+/// The character models, as the ragdoll needs them (docs/ARCHITECTURE.md §2). The
 /// ragdoll never reads model files or the game's model memory itself: it asks for finished products (frozen body
 /// surfaces, rendered vertices with their bone weights, triangle soups, fitted volumes, hair samples).
-/// <para>Departures from the §2.3 sketch, all to keep every read, every float operation and every background task
+/// <para>Shaped to keep every read, every float operation and every background task
 /// where it was: characters are addressed by their game object address (as in A2a); the body-surface capture keeps
 /// the controller's own partitioning code (<see cref="ProvideBodySurface"/> is handed it); and the reduced surfaces
 /// of a cached body surface, which a background queue builds, are asked of the mesh source too, so a replay can say

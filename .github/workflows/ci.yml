@@ -18,10 +18,10 @@ jobs:
           dotnet-version: |
             8.0.x
             10.0.x
-      - run: dotnet build AdvancedRagdoll.csproj -c Release
+      - run: dotnet build src/AdvancedRagdoll/AdvancedRagdoll.csproj -c Release
       - run: dotnet run --project tests/LibrarySample -c Release
       - run: dotnet run --project tests/BoneNameLiterals -c Release
-      - run: dotnet pack AdvancedRagdoll.csproj -c Release -o artifacts
+      - run: dotnet pack src/AdvancedRagdoll/AdvancedRagdoll.csproj -c Release -o artifacts
 
   # Offline tests: each compiles the library source files it checks (so it sees internal types) and needs nothing
   # outside this repository.
@@ -65,3 +65,18 @@ jobs:
       - name: Shared workers with collision LOD
         if: matrix.quality == 0
         run: dotnet run --project tests/MeshStress -c Release -- --policy bounded --pose ${{ matrix.pose }} --quality 50 --terrain-grid 12 --solid-terrain --iterations 8 --steps 600 --frozen-mesh --background-lod --threads 2 --shared-dispatcher --rss-mib 256 --seconds 120
+
+  # Golden output of the dropped-weapon simulation, compared byte for byte. The golden files were written on Windows
+  # x64 (.NET 10): the output is bit-exact only on the same OS family, runtime and BepuPhysics version (the library's
+  # trigonometry goes through the C runtime's math functions), so this runs on Windows.
+  weapon-drop-golden:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet run --project tests/WeaponDropGolden -c Release

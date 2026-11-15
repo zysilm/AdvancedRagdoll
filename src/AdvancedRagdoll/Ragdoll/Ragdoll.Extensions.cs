@@ -11,7 +11,7 @@ using BepuSimulation = BepuPhysics.Simulation;
 
 namespace AdvancedRagdoll;
 
-// Extension points (stage A3b, docs/RAGDOLL_LIBRARY_ARCHITECTURE.md §7): registration, and the context through which
+// Extension points (docs/ARCHITECTURE.md §5): registration, and the context through which
 // an extension reaches this controller's simulation. Call sites: the fixed-step loop (Stepping.cs) and
 // RagdollNarrowPhaseCallbacks.ConfigureContactManifold, each right after the old partial method and only when that
 // did not handle it. With nothing registered each costs one length check.
