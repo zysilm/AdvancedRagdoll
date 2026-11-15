@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <!-- AdvancedRagdoll: ragdoll physics for .NET games on BepuPhysics. References BepuPhysics only. The public API is the
        Ragdoll constructor on AdvancedRagdoll.Hosting.RagdollHost and the skeleton profile types; everything else is
        internal for 0.1. See README.md at the repository root. -->
