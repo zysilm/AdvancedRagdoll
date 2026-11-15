@@ -30,14 +30,14 @@ public unsafe partial class Ragdoll
         catch (Exception ex) { log.Warning(ex, "Frozen collision cache capture failed; retrying when the model is ready."); }
         if (!isActive)
         {
-            try { OnAnimatedHairFrame(); }
-            catch (Exception ex) { RemoveHairRig(); log.Error(ex, "Animated hair update failed"); }
+            try { hairRig.OnAnimatedFrame(); }
+            catch (Exception ex) { hairRig.Remove(); log.Error(ex, "Animated hair update failed"); }
             return;
         }
 
         try
         {
-            if (!settings.RagdollHairPhysics && hairRigActive) RemoveHairRig();
+            if (!settings.RagdollHairPhysics && hairRig.Active) hairRig.Remove();
             var dt = ComputeFrameDelta();
             elapsed += dt;
             if (rec != null) RecRenderFrame(dt);
@@ -51,17 +51,13 @@ public unsafe partial class Ragdoll
                 if (rec != null) RecPreFrame();
                 if (!RecDecision("ShouldStartPhysics", ShouldStartPhysics(dt)))
                 {
-                    OnAnimatedHairFrame();
+                    hairRig.OnAnimatedFrame();
                     // Keep sampling the animated pose so the last frame before handoff carries
                     // its velocity into the physics bodies (no freeze on activation).
                     SampleHandoffPose(dt);
                     return;
                 }
-                lock (animatedHairGate)
-                {
-                    animatedHair = false;
-                    hairRigChains.Clear(); hairRigActive = false;
-                }
+                hairRig.ResetForPhysicsStart();
                 if (!InitializePhysics()) { Deactivate(); return; }
                 physicsStarted = true;
                 frameCount = 0;
@@ -205,7 +201,7 @@ public unsafe partial class Ragdoll
     private void ApplyFallGravity(float dt)
     {
         if (simulation == null || ragdollBones.Count == 0) return;
-        if (inWater) return; // sinking is not falling
+        if (water.InWater) return; // sinking is not falling
 
         // Being held is not falling.
         if (grabSlots.Count > 0 || standingActive) return;
@@ -321,7 +317,7 @@ public unsafe partial class Ragdoll
             (activeRagdollMeshVolumes && activeMeshCacheRevision != settings.RagdollMeshCacheRevision))
         {
             log.Info("Frozen mesh collision option/cache refreshed; rebuilding physical geometry.");
-            RemoveHairRig();
+            hairRig.Remove();
             DestroySimulation();
             physicsStarted = false;
             return;
@@ -414,8 +410,8 @@ public unsafe partial class Ragdoll
             corpseWakeCenter = simulation.Bodies.GetBodyReference(ragdollBones[0].BodyHandle).Pose.Position;
         RefreshCorpseBounds();
 
-        UpdateWaterProbe(dt);
-        var activityBlocksRest = inWater || externalBodyAwake || HairNeedsStep || npcTraversalProxyActivityThisFrame ||
+        water.UpdateProbe(dt);
+        var activityBlocksRest = water.InWater || externalBodyAwake || hairRig.NeedsStep || npcTraversalProxyActivityThisFrame ||
             npcColliderMovedNearCorpse || grabSlots.Count > 0 ||
             directedCollapseActive ||
             entryConditioningActive || kneePowerLossActive || skeletonMoved || biomechanicalSettleActive;
@@ -708,14 +704,14 @@ public unsafe partial class Ragdoll
                 DriveGrabConstraints(FixedTimestep); // advance finite-force targets before solve
                 ApplyCachedMeshLod();
                 ApplyFallGravity(FixedTimestep); // a descent that bites, on top of the integrator's honest g
-                ApplyWaterForces(FixedTimestep);
+                water.ApplyForces(FixedTimestep);
                 var steppedExternally = false;
                 if (extensionSet.Step.Length != 0) extensionSet.OnSubstep(FixedTimestep, ref steppedExternally);
                 if (!steppedExternally) StepPhysicsSimulation(FixedTimestep);
                 ClampVelocities(maxLinear, maxAngular);
                 ApplyStandingAnchorCorrection();
                 UpdateCharacterSurfaceRuntime();
-                StepHairRig(); // one-way guides follow the accepted head pose
+                hairRig.Step(); // one-way guides follow the accepted head pose
                 DetectImpact(FixedTimestep);
                 if (rec != null) RecStep(substeps, steppedExternally);
                 physicsAccumulator -= FixedTimestep;
@@ -835,7 +831,7 @@ public unsafe partial class Ragdoll
 
             boneValid[i] = true;
         }
-        if (AnyExternalBodyAwake() || HairNeedsStep) anyAwake = true;
+        if (AnyExternalBodyAwake() || hairRig.NeedsStep) anyAwake = true;
 
         EnsureTerrainPatchCoverage(worldPositions, boneValid, boneCount);
 
@@ -957,7 +953,7 @@ public unsafe partial class Ragdoll
                 HideLimbSubtree(skel, boneName);
 
         // Reassert flexible hair after head propagation, including settled frames.
-        if (hairRigActive) ReadbackHairRig(skel);
+        if (hairRig.Active) hairRig.Readback(skel);
         if (rec != null) RecSkeleton(RecordType.PoseOut, PosePurpose.FrameOut, targetCharacterAddress, skel, true);
 
         // (Dev) Keep the character visible when the ragdoll is flung far from the frozen death

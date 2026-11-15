@@ -98,12 +98,7 @@ public unsafe partial class Ragdoll
         followWasActive = s.FollowWasActive;
         // Only what decides whether the first live hair frame rebuilds the rig (and so reads the hair model); the
         // solver state of the game's live rig is not recorded, and its poses before the ragdoll are not outputs.
-        lock (animatedHairGate)
-        {
-            animatedHair = s.LiveHairRunning;
-            animatedHairDraw = s.LiveHairRunning ? s.LiveHairDraw : 0;
-            animatedHairObject = s.LiveHairRunning ? s.LiveHairObject : 0;
-        }
+        hairRig.RestoreLiveHairState(s.LiveHairRunning, s.LiveHairDraw, s.LiveHairObject);
         if (s.HasBodySurfaces)
         {
             frozenMeshActor = s.FrozenMeshActor;

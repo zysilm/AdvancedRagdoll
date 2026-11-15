@@ -10,17 +10,14 @@ namespace AdvancedRagdoll;
 
 public unsafe partial class Ragdoll
 {
-    private Vector3 ModelToWorld(Vector3 modelPos)
-        => skelWorldPos + Vector3.Transform(modelPos * skelWorldScale, skelWorldRot);
+    // The skeleton root transform lives in the simulation context (SimulationContext.cs).
+    private Vector3 ModelToWorld(Vector3 modelPos) => ctx.ModelToWorld(modelPos);
 
-    private Vector3 WorldToModel(Vector3 worldPos)
-        => DivideComponents(Vector3.Transform(worldPos - skelWorldPos, skelWorldRotInv), skelWorldScale);
+    private Vector3 WorldToModel(Vector3 worldPos) => ctx.WorldToModel(worldPos);
 
-    private Quaternion ModelRotToWorld(Quaternion modelRot)
-        => Quaternion.Normalize(skelWorldRot * modelRot);
+    private Quaternion ModelRotToWorld(Quaternion modelRot) => ctx.ModelRotToWorld(modelRot);
 
-    private Quaternion WorldRotToModel(Quaternion worldRot)
-        => Quaternion.Normalize(skelWorldRotInv * worldRot);
+    private Quaternion WorldRotToModel(Quaternion worldRot) => ctx.WorldRotToModel(worldRot);
 
     // Static overloads for NPC skeletons (each NPC has its own transform)
     private static Vector3 NpcModelToWorld(Vector3 modelPos, Vector3 skelPos, Quaternion skelRot, Vector3 skelScale)

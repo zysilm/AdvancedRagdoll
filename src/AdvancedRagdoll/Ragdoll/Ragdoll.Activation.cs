@@ -27,7 +27,7 @@ public unsafe partial class Ragdoll
     /// hair's ground samples.</summary>
     internal unsafe void OnFrameworkTick()
     {
-        SampleAnimatedHairTerrain();
+        hairRig.SampleAnimatedTerrain();
         if (!pendingFollowPos.HasValue)
             return;
         var pos = pendingFollowPos.Value;
@@ -173,7 +173,7 @@ public unsafe partial class Ragdoll
         terrainPatchCenters.Clear();
         nHaraIndex = -1;
         kaoBodyBoneIndex = -1;
-        RemoveHairRig();
+        hairRig.Remove();
 
         DestroySimulation();
         log.Info("Ragdoll: Deactivated");
@@ -353,7 +353,7 @@ public unsafe partial class Ragdoll
         }
         npcTraversalProxyActivityThisFrame = false;
         softBodyBodyHandles.Clear();
-        ClearWeaponContactProxyState();
+        weaponContact.ClearState();
         npcCollisionStates.Clear();
         npcTraversalAnchors.Clear();
         attackStrikeTimer = 0f;

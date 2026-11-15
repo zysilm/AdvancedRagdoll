@@ -122,3 +122,38 @@ simulation of its own, shared by all dropped weapons. Its host (`Hosting/WeaponD
 interfaces and adds `IWeaponDrawSource` for the drawn weapons. The ragdoll recordings do not cover it;
 `tests/WeaponDropGolden` replays fixed synthetic scenarios and compares the complete output with committed golden
 files byte for byte.
+
+## 8. Components and the simulation context
+
+The `Ragdoll` class is being split, one subsystem at a time, into components that share one simulation context. Each
+step moves code without changing what it does: every read, write, random draw, clock reading, recording call, log line
+and physics call happens in the same order as before, and the ragdoll recordings replay bit for bit.
+
+- **`SimulationContext`** (`Ragdoll/SimulationContext.cs`) holds the state many components read and write: the host
+  services they use (skeletons, world queries, mesh source, actors, clock, log, the settings of this frame), the
+  skeleton profile and its bone configurations, the simulation and its buffer pool, the ragdoll's bodies, the target
+  character, whether the rig is generated, and the skeleton root transform with its model/world conversions. It is a
+  plain object with fixed fields, made once with the ragdoll; it is not a service locator. Only state an extracted
+  component needs moves into it.
+- **A component** is a sealed class per subsystem. It owns that subsystem's fields, gets the context in its
+  constructor, and keeps no reference to the ragdoll. The ragdoll creates its components in its constructor, keeps the
+  same members it had (internal and public) and forwards them to the component.
+- **The rest of the class**, not split yet, reaches the moved fields through private forwarding properties under their
+  old names (`simulation`, `ragdollBones`, `settings`, `skelWorldPos`, ...), so the code that is not split yet reads
+  and writes the same storage.
+- **`CoreCalls`**: what a component still needs from the part that is not split yet (recording, the mesh caches,
+  constraint removal, the character scale, the render interpolation of the stepping loop) goes through this one small
+  object. Each member forwards to the ragdoll's own method unchanged. It lists exactly where the components still
+  depend on the rest, and shrinks as that becomes components too.
+- For now the context, `CoreCalls` and the components are private types nested in `Ragdoll`, in the partial file of
+  their subsystem: they use the ragdoll's private body table and helpers without widening anything a trusted host can
+  see. The compiler keeps a nested component honest: it has no `Ragdoll` instance, so any use of the ragdoll's own
+  state that did not go through the context fails to compile.
+
+Components so far:
+
+| Component | File | Owns |
+| --- | --- | --- |
+| `Water` | `Ragdoll.Water.cs` | the water level over the corpse, the probe timer and position, the wave clock, whether a body is in the water |
+| `WeaponContactSurfaces` | `Ragdoll.WeaponContactMesh.cs` | the kinematic surface twins a weapon rests on, and the three contact filter sets for them |
+| `HairRig` | `Ragdoll.HairRig.cs`, `Ragdoll.HairSurfaces.cs` | the hair guide chains, live (animated) hair, the body surfaces and ground samples the hair rests on |

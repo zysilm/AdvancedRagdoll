@@ -28,7 +28,7 @@ public unsafe partial class Ragdoll
     {
         if (simulation == null) return;
         startOverlap?.BeginStep();
-        SyncWeaponContactProxies();
+        weaponContact.Sync();
         if (!activeRagdollMeshVolumes || activeRagdollIsGeneric)
         {
             ReleaseMeshDispatcher();

@@ -33,33 +33,36 @@ public unsafe partial class Ragdoll : IDisposable
     // Everything the controller asks of the game goes through these host services (Hosting/; docs/ARCHITECTURE.md
     // §2).
     private readonly RagdollHostServices host;
-    private readonly IHostSkeletonSource skeletons;
+    // The state shared with the components (SimulationContext.cs). The fields that moved there are reached through
+    // the forwarding properties below under their old names, until the code using them is split into components too.
+    private readonly SimulationContext ctx;
+    private IHostSkeletonSource skeletons => ctx.Skeletons;
     // The character models: every mesh the controller uses comes from here, as a finished product.
-    private readonly IMeshSource meshes;
-    private readonly IHostWorldQuery world;
-    private readonly IHostActors actors;
+    private IMeshSource meshes => ctx.Meshes;
+    private IHostWorldQuery world => ctx.World;
+    private IHostActors actors => ctx.Actors;
     // Who else may collide with the corpse. The extra collision actors are evaluated lazily when
     // collision is built (at Activate), not at construction — the player's persistent controller is
     // created before any companions spawn, so a snapshot would always be empty.
     private readonly IHostColliders colliders;
-    private readonly IRagdollClock clock;
+    private IRagdollClock clock => ctx.Clock;
     private readonly IRagdollRandom random;
     private readonly IRagdollScheduler scheduler;
     private readonly IHostSettingsSource settingsSource;
     // The settings for this frame: refreshed once at the start of every render frame. The physics
     // worker threads read this copy too (never the user's Configuration).
-    private readonly HostSettings settings = new();
-    private readonly IRagdollLog log;
+    private HostSettings settings => ctx.Settings;
+    private IRagdollLog log => ctx.Log;
     // Physics simulation
-    private BufferPool? bufferPool;
+    private BufferPool? bufferPool { get => ctx.BufferPool; set => ctx.BufferPool = value; }
     // What each pair of the ragdoll's own bodies overlapped by when it started (see the class).
     private StartOverlapAllowance? startOverlap;
-    private BepuSimulation? simulation;
+    private BepuSimulation? simulation { get => ctx.Simulation; set => ctx.Simulation = value; }
     private int externalBodyGeneration;
 
     // State
     private bool isActive;
-    private nint targetCharacterAddress;
+    private nint targetCharacterAddress { get => ctx.TargetCharacterAddress; set => ctx.TargetCharacterAddress = value; }
     // EntityId captured at Activate — used every frame to detect that the target despawned
     // and its object-table slot was reused by an unrelated character (so we don't freeze
     // and write ragdoll bones onto the newcomer).
@@ -106,7 +109,6 @@ public unsafe partial class Ragdoll : IDisposable
     // We measure real wall-clock dt and advance the simulation in fixed-size substeps.
     private long lastFrameTimestamp;
     private float physicsAccumulator;
-    private const float FixedTimestep = 1f / 60f;
     private const int MaxSubstepsPerFrame = 4;  // cap catch-up to avoid a spiral of death
     private const float SlowFrameSeconds = 1f / 30f; // slower than this, one substep a frame
     private const float MaxFrameDelta = 0.1f;   // ignore huge gaps (loading screens, hitches)
@@ -131,13 +133,13 @@ public unsafe partial class Ragdoll : IDisposable
 
     // Skeleton world transform (captured at activation from Skeleton.Transform)
     // ModelPose is in skeleton-local space; these convert to/from world space.
-    private Vector3 skelWorldPos;
-    private Quaternion skelWorldRot;
-    private Quaternion skelWorldRotInv;
-    private Vector3 skelWorldScale = Vector3.One;
+    private Vector3 skelWorldPos { get => ctx.RootPosition; set => ctx.RootPosition = value; }
+    private Quaternion skelWorldRot { get => ctx.RootRotation; set => ctx.RootRotation = value; }
+    private Quaternion skelWorldRotInv { get => ctx.RootRotationInverse; set => ctx.RootRotationInverse = value; }
+    private Vector3 skelWorldScale { get => ctx.RootScale; set => ctx.RootScale = value; }
 
     // Bone-to-body mapping
-    private readonly List<RagdollBone> ragdollBones = new();
+    private List<RagdollBone> ragdollBones => ctx.Bodies;
     private readonly List<ExternalBodyHandle> externalBodies = new();
     private readonly List<ExternalRigHandle> externalRigs = new();
     private readonly HashSet<int> externalDynamicBodyHandles = new();
@@ -205,7 +207,7 @@ public unsafe partial class Ragdoll : IDisposable
     // Generic rigs get extra stabilization (more solver iterations + velocity clamp)
     // because their auto-generated constraint network is stiffer/less conditioned
     // than the hand-tuned human profile.
-    private bool activeRagdollIsGeneric;
+    private bool activeRagdollIsGeneric { get => ctx.IsGeneric; set => ctx.IsGeneric = value; }
     private bool useLocalDismemberBones;
     private readonly List<string> localDismemberBones = new();
 
@@ -223,8 +225,8 @@ public unsafe partial class Ragdoll : IDisposable
     private static RagdollBoneDef[]? defaultBoneDefs;
 
     // This ragdoll's profile and the bone configurations built from it.
-    private readonly SkeletonProfile skeletonProfile;
-    private readonly RagdollBoneConfig[] boneDefaults;
+    private SkeletonProfile skeletonProfile => ctx.Profile;
+    private RagdollBoneConfig[] boneDefaults => ctx.BoneDefaults;
 
     /// <summary>Registers the host's default humanoid profile and builds its bone tables (<see cref="AllBoneDefaults"/>,
     /// <see cref="DefaultBoneDefs"/>). Once per process (the same profile again is accepted), before the tables are
@@ -277,14 +279,8 @@ public unsafe partial class Ragdoll : IDisposable
 
     // Ground height (physics ground may be lowered by floor offset)
     private float groundY;
-    // Water: still level of the surface over the corpse (NaN when there is none), probed now and then.
-    private float waterLevel = float.NaN;
-    private float waterProbeCountdown;
-    private Vector3 waterProbePosition;
-    private float waterClock;
-    private bool inWater;
-    private const float WaterProbeInterval = 0.5f;
-    private const float WaterProbeMoveDistance = 1.5f;
+    // Water under the corpse (Ragdoll.Water.cs).
+    private readonly Water water;
     // Real terrain ground (before floor offset), used for visual correction
     private float realGroundY;
     private readonly List<Vector2> terrainPatchCenters = new();
@@ -398,23 +394,26 @@ public unsafe partial class Ragdoll : IDisposable
     internal Ragdoll(RagdollHostServices host, ICollapseProfileSource collapseProfiles, SkeletonProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
-        skeletonProfile = profile;
         // The default profile keeps the process-wide table (the same array every ragdoll used to share).
-        boneDefaults = ReferenceEquals(profile, humanoidProfile) ? allBoneDefaults! : ToBoneConfigs(profile.BoneDefinitions);
+        var profileBoneDefaults = ReferenceEquals(profile, humanoidProfile) ? allBoneDefaults! : ToBoneConfigs(profile.BoneDefinitions);
         anatomicalForward = profile.Forward;
         this.host = host;
-        skeletons = host.Skeletons;
+        var hostSkeletons = host.Skeletons;
         // The recorder observes these four from outside (Hosting/RecordingDecorators.cs).
-        world = new RecordingWorldQuery(host.World, () => rec);
+        var recordedWorld = new RecordingWorldQuery(host.World, () => rec);
         // Mesh products are recorded inside a frame or a recorded call only (another thread may ask between frames).
-        meshes = new RecordingMeshSource(host.Meshes, () => recDepth > 0 ? rec : null, () => recMeshCaches);
-        actors = host.Actors;
+        var recordedMeshes = new RecordingMeshSource(host.Meshes, () => recDepth > 0 ? rec : null, () => recMeshCaches);
+        var hostActors = host.Actors;
         colliders = host.Colliders;
-        clock = new RecordingClock(host.Clock, () => rec);
+        var recordedClock = new RecordingClock(host.Clock, () => rec);
         random = new RecordingRandom(host.Random, () => rec);
         scheduler = host.Scheduler;
         settingsSource = host.Settings;
-        log = host.Log;
+        ctx = new SimulationContext(new CoreCalls(this), profile, profileBoneDefaults, hostSkeletons, recordedWorld,
+            recordedMeshes, hostActors, recordedClock, host.Log);
+        water = new Water(ctx);
+        weaponContact = new WeaponContactSurfaces(ctx);
+        hairRig = new HairRig(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
@@ -526,7 +525,7 @@ public unsafe partial class Ragdoll : IDisposable
         Deactivate();
         frozenMeshCache?.Dispose(); frozenMeshCache = null;
         ClearWeaponContactMeshes();
-        RemoveHairRig();
+        hairRig.Remove();
     }
 }
 

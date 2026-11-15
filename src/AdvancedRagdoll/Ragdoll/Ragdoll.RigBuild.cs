@@ -22,10 +22,7 @@ public unsafe partial class Ragdoll
 {
     private bool InitializePhysics()
     {
-        waterLevel = float.NaN;
-        waterProbeCountdown = 0f;
-        waterClock = 0f;
-        inWater = false;
+        water.Reset();
         activeRagdollMeshVolumes = settings.RagdollMeshVolumes;
         activeMeshCacheRevision = settings.RagdollMeshCacheRevision;
         var skel = skeletons.TryGetSkeleton(targetCharacterAddress, PosePurpose.Init);
@@ -192,9 +189,9 @@ public unsafe partial class Ragdoll
                 NpcTraversalGhostKinematicBodies = npcTraversalGhostKinematicBodyHandles,
                 NpcTraversalDynamicBodies = npcTraversalDynamicBodyHandles,
                 SoftBodyBodies = softBodyBodyHandles,
-                WeaponContactBodies = weaponContactBodyHandles,
-                WeaponContactProxyBodies = weaponContactProxyHandles,
-                WeaponContactProxiedBodies = weaponContactProxiedBodyHandles,
+                WeaponContactBodies = weaponContact.WeaponBodies,
+                WeaponContactProxyBodies = weaponContact.ProxyBodies,
+                WeaponContactProxiedBodies = weaponContact.ProxiedBodies,
                 SoftBodyStaticCollision = settings.RagdollSoftTissueCollision,
                 Friction = RagdollTuning.Friction,
                 Config = settings,
@@ -1515,7 +1512,7 @@ public unsafe partial class Ragdoll
         // pendulum simulator is retired). If the rig cannot build (no head ragdoll body /
         // no simulatable hair partial), hair simply stays rigid this activation.
         if (settings.RagdollHairPhysics && kaoBodyBoneIndex >= 0)
-            BuildHairRig(skel);
+            hairRig.Build(skel);
 
         if (rec != null) RecInitEnd(ragdollBones.Count > 0, solverIterations, solverSubsteps, genericSkeleton);
         return ragdollBones.Count > 0;

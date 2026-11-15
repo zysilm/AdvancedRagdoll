@@ -1004,7 +1004,7 @@ public unsafe partial class Ragdoll
             using (w.Begin(RecordType.HairMesh))
             {
                 w.Bool(binding != null);
-                w.Bool(animatedHair);
+                w.Bool(hairRig.AnimatedHair);
                 w.I32(binding?.VisibleVertices ?? 0);
                 w.I32(binding?.Samples.Count ?? 0);
                 if (binding == null) return;
@@ -1075,7 +1075,7 @@ public unsafe partial class Ragdoll
                 w.I32(simulation?.Statics.Count ?? 0);
                 w.F32(savedOverallSpeed);
                 w.I32(npcCollisionStates.Count);
-                w.I32(hairRigChains.Count);
+                w.I32(hairRig.ChainCount);
             }
             if (simulation != null)
                 RagdollRecordingBepu.WriteBodyStates(w, simulation, 0, recPhysicsFrame, 0, false,
@@ -1852,20 +1852,20 @@ public unsafe partial class Ragdoll
     internal void AttachWeaponContactBody(BodyHandle weapon)
     {
         var w = rec;
-        if (w == null) { AttachWeaponContactBodyCore(weapon); return; }
+        if (w == null) { weaponContact.Attach(weapon); return; }
         using (RecCall(w, nameof(AttachWeaponContactBody))) w.I32(weapon.Value);
         recDepth++;
-        try { AttachWeaponContactBodyCore(weapon); }
+        try { weaponContact.Attach(weapon); }
         finally { RecLeave(); }
     }
 
     internal void DetachWeaponContactBody(BodyHandle weapon)
     {
         var w = rec;
-        if (w == null) { DetachWeaponContactBodyCore(weapon); return; }
+        if (w == null) { weaponContact.Detach(weapon); return; }
         using (RecCall(w, nameof(DetachWeaponContactBody))) w.I32(weapon.Value);
         recDepth++;
-        try { DetachWeaponContactBodyCore(weapon); }
+        try { weaponContact.Detach(weapon); }
         finally { RecLeave(); }
     }
 

@@ -23,6 +23,15 @@ public unsafe partial class Ragdoll
     private readonly Dictionary<nint, (uint Entity, nint Draw, FrozenMeshGeometryCache? Cache)> weaponContactMeshes = new();
     private readonly List<nint> weaponContactMeshOrder = new();
 
+    /// <summary>The rendered surface already cached for this actor; never captures for hair.</summary>
+    private FrozenMeshGeometryCache? CachedSurfaceFor(nint address)
+    {
+        if (address == 0) return null;
+        var entity = actors.GetEntityId(address);
+        if (frozenMeshCache != null && frozenMeshActor == address && frozenMeshEntity == entity) return frozenMeshCache;
+        return weaponContactMeshes.TryGetValue(address, out var known) && known.Entity == entity ? known.Cache : null;
+    }
+
     // Weapon and hair contacts need the cache on the main controller only; body mesh volumes need it everywhere.
     private bool FrozenMeshCacheWanted => settings.RagdollMeshVolumes ||
         (settings.WeaponBodyMeshContacts || settings.RagdollHairPhysics && settings.RagdollHairBodyMesh) && RunAnimatedHair;
