@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
   <!-- AdvancedRagdoll: ragdoll physics for .NET games on BepuPhysics. References BepuPhysics only. The public API is the
        Ragdoll constructor on AdvancedRagdoll.Hosting.RagdollHost and the skeleton profile types; everything else is
        internal for 0.1. See README.md at the repository root. -->
@@ -29,7 +29,7 @@
        NuGet Trusted Publishing when a version tag is pushed. -->
   <PropertyGroup>
     <IsPackable>true</IsPackable>
-    <Version>0.1.0-beta.2</Version>
+    <Version>0.1.0-beta.3</Version>
     <Authors>zysilm</Authors>
     <Description>Ragdoll physics for .NET games on BepuPhysics: builds a ragdoll from a character's skeleton (a hand-tuned humanoid profile, or a rig generated from any skeleton), takes over from the death animation at a chosen moment, lands on the game's ground and water, and writes the pose back. Not thread-safe per ragdoll; one BepuPhysics simulation per ragdoll.</Description>
     <PackageTags>ragdoll;physics;bepuphysics;animation;games</PackageTags>
