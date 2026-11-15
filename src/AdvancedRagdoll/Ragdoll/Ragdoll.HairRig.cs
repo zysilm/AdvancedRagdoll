@@ -94,7 +94,7 @@ public unsafe partial class Ragdoll
         internal void Build(IHostSkeleton skel)
         {
             var meshBinding = ctx.Meshes.HairMesh;
-            if (ctx.Core.Recording) ctx.Core.RecHairMesh(meshBinding);
+            if (ctx.Recorder.IsRecording) ctx.Recorder.HairMesh(meshBinding, animatedHair);
             hairRigChains.Clear(); hairRigActive = false; hairGroundCursor = 0;
             ClearHairSurfaceRegions();
             if (!animatedHair)

@@ -47,7 +47,7 @@ public unsafe partial class Ragdoll
             var cache = ctx.Settings.RagdollHairBodyMesh ? ctx.Core.CachedSurfaceFor(address) : null;
             if (cache == hairSurfaceCache) return;
             hairSurfaceCache = cache;
-            if (ctx.Core.Recording) ctx.Core.RecMeshCache(cache, "hairSurface");
+            if (ctx.Recorder.IsRecording) ctx.Recorder.MeshCache(cache, "hairSurface");
             hairSurfaceRegions.Clear(); hairSurfaceNames.Clear();
             if (cache == null) return;
             foreach (var name in cache.Names)

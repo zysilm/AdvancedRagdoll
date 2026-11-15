@@ -64,7 +64,7 @@ public unsafe partial class Ragdoll
         {
             if (ctx.Simulation == null || ctx.BufferPool == null) return;
             var cache = ctx.Core.GetWeaponContactMesh(ctx.TargetCharacterAddress);
-            if (ctx.Core.Recording) ctx.Core.RecMeshCache(cache, "weaponContact");
+            if (ctx.Recorder.IsRecording) ctx.Recorder.MeshCache(cache, "weaponContact");
             if (cache == null) return;
             var ragdollBones = ctx.Bodies;
             for (int i = 0; i < ragdollBones.Count; i++)
@@ -79,7 +79,7 @@ public unsafe partial class Ragdoll
                 try { shape = ctx.Simulation.Shapes.Add(mesh); }
                 catch { mesh.Dispose(ctx.BufferPool); throw; }
                 ctx.GetBonePoseFromBody(rb, out var origin, out var rotation, out _, out _);
-                if (ctx.Core.Recording) ctx.Core.RecMeshUse("weaponContactProxy", rb.Name, local);
+                if (ctx.Recorder.IsRecording) ctx.Recorder.MeshUse("weaponContactProxy", rb.Name, local);
                 var body = ctx.Simulation.Bodies.Add(BodyDescription.CreateKinematic(new RigidPose(origin, rotation), default,
                     new CollidableDescription(shape, 0.04f), new BodyActivityDescription(0.01f)));
                 weaponContactProxies.Add(new WeaponContactProxy { BoneListIndex = i, RagdollBody = rb.BodyHandle, Body = body, Shape = shape });

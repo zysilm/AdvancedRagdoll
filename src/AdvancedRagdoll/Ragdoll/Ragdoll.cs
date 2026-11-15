@@ -342,6 +342,8 @@ public unsafe partial class Ragdoll : IDisposable
         // a6-8
         skeletonReader = new SkeletonReader(ctx);
         poseWriter = new PoseWriter(ctx);
+        // a6-9
+        ctx.Recorder = recorder = new Recorder(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }

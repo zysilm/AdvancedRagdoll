@@ -35,7 +35,7 @@ public unsafe partial class Ragdoll
                 body.SetShape(replacementIndex);
                 ctx.Simulation.Shapes.RemoveAndDispose(previous, ctx.BufferPool);
                 bone.MeshLod = lod;
-                if (ctx.Core.Recording) ctx.Core.RecMeshLod("step", bone.Name, lod);
+                if (ctx.Recorder.IsRecording) ctx.Recorder.MeshLod("step", bone.Name, lod);
                 ragdollBones[index] = bone;
                 body.Awake = true; body.UpdateBounds();
                 lastMeshLodInstall = now;
