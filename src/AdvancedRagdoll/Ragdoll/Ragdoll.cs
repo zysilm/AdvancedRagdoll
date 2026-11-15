@@ -61,7 +61,6 @@ public unsafe partial class Ragdoll : IDisposable
     private int externalBodyGeneration;
 
     // State
-    private bool isActive;
     private nint targetCharacterAddress { get => ctx.TargetCharacterAddress; set => ctx.TargetCharacterAddress = value; }
     // EntityId captured at Activate — used every frame to detect that the target despawned
     // and its object-table slot was reused by an unrelated character (so we don't freeze
@@ -223,6 +222,10 @@ public unsafe partial class Ragdoll : IDisposable
     // This ragdoll's profile and the bone configurations built from it.
     private SkeletonProfile skeletonProfile => ctx.Profile;
     private RagdollBoneConfig[] boneDefaults => ctx.BoneDefaults;
+    // a6-3
+    private bool isActive { get => ctx.IsActive; set => ctx.IsActive = value; }
+    /// <summary>What the rig actually weighs, summed at InitializePhysics.</summary>
+    private float ragdollTotalMass { get => ctx.TotalMass; set => ctx.TotalMass = value; }
 
     /// <summary>Registers the host's default humanoid profile and builds its bone tables (<see cref="AllBoneDefaults"/>,
     /// <see cref="DefaultBoneDefs"/>). Once per process (the same profile again is accepted), before the tables are
@@ -263,23 +266,13 @@ public unsafe partial class Ragdoll : IDisposable
     /// both of which are spent on a body the camera is very likely not framing.
     /// </summary>
     private bool targetIsLocalPlayer;
-    // Ground patch size. Set per ragdoll from how far its body reaches (CollisionMeshGeometry.PatchFor):
-    // 6 m / 1 m samples for a human, larger for a large monster.
-    private float terrainPatchRadius = 6.0f;
-    private float terrainPatchStep = 1.0f;
-    private float terrainPatchRefreshDistance = 4.0f;
     private const float TerrainRaycastStartYOffset = 10.0f;
     private const float TerrainRaycastDistance = 80.0f;
     private const int MaxTerrainPatches = 32;
     private const float SafetyGroundDrop = 0.75f;
 
-    // Ground height (physics ground may be lowered by floor offset)
-    private float groundY;
     // Water under the corpse (Ragdoll.Water.cs).
     private readonly Water water;
-    // Real terrain ground (before floor offset), used for visual correction
-    private float realGroundY;
-    private readonly List<Vector2> terrainPatchCenters = new();
 
     // Diagnostic frame counter
     private int frameCount;
@@ -336,22 +329,6 @@ public unsafe partial class Ragdoll : IDisposable
     // bounds the number of constraints that can converge on one corpse body when a large pack crowds
     // around it (and avoids BEPU 2.5 beta's SequentialFallbackBatch removal bug).
     private readonly HashSet<nint> lightweightNpcCollisionAddresses = new();
-    // Monster strike: during the attack window the monster's collider bones impart their swing
-    // velocity as an impulse to nearby ragdoll bodies (a fast swing = a heavy hit, at the limb's
-    // real contact point).
-    private float attackStrikeTimer;
-    private float strikePower;
-    private nint strikeColliderAddress;
-    // Bone-driven swarm attacks may have several animated collider sources in one strike window.
-    // The single address above remains the optional weapon source; this set drives body bones.
-    private readonly HashSet<nint> strikeColliderAddresses = new();
-    // Weapon strike: a humanoid's weapon is a separate draw object (not in the bone capsules), so
-    // track its blade endpoints to give a sword swing its own velocity-driven hit.
-    private Vector3 prevBladeA, prevBladeB;
-    private bool weaponPrevValid;
-    // Each body is struck at most once per swing — the window spans many frames, so striking every
-    // frame accumulated into a launch. One hit per swing makes strike power linear/predictable.
-    private readonly HashSet<int> struckThisWindow = new();
 
 
     /// <summary>True from <see cref="Activate(in RagdollActivation)"/> until <see cref="Deactivate"/> (or until the ragdoll
@@ -414,6 +391,12 @@ public unsafe partial class Ragdoll : IDisposable
         meshVolumes = new MeshVolumes(ctx);
         structuralFit = new StructuralFit(ctx);
         surfaceRuntime = new SurfaceRuntime(ctx);
+        // a6-3
+        ground = new Ground(ctx);
+        standing = new StandingSupport(ctx);
+        grab = new Grab(ctx);
+        impacts = new Impacts(ctx);
+        strike = new WeaponStrike(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
@@ -427,23 +410,7 @@ public unsafe partial class Ragdoll : IDisposable
 
     private readonly List<SwingStressMonitor> swingStressMonitors = new();
     private readonly Dictionary<string, JointLimitStress> stressWorstByBone = new();
-    private readonly List<Vector3> exactGroundScratch = new();
 
-    private float impactFreezeRemaining;
-    private float impactCooldownRemaining;
-    private float previousDescentSpeed;
-    private readonly List<int> torsoBodyIndices = new();
-
-    private uint impactRandomState = 0x9E3779B9u;
-
-    private readonly Dictionary<int, GrabSlot> grabSlots = new();
-    private int nextGrabSlotId = 1;
-    // Address of the grabbing NPC whose collision is parked during grab (0 = none). Shared across
-    // every slot — every pair a single grab session holds belongs to the same grabber.
-    private nint suspendedNpcAddress;
-
-    /// <summary>What the rig actually weighs, summed at InitializePhysics.</summary>
-    private float ragdollTotalMass;
     private float traversalMassMultiplier = 1f;
 
     private readonly List<ExternalRigHandle> carriedRigs = new();
@@ -487,21 +454,6 @@ public unsafe partial class Ragdoll : IDisposable
     // Knee power-loss tuning is fixed at the settings class defaults (no longer exposed in the UI).
     private static readonly GuidedCollapseKneePowerLossSettings KneePowerLossDefaults = new();
 
-    // --- Standing support constraint API (execution mode) ---
-    // Pelvis: LinearServo to a computed standing height + AngularServo upright.
-    // Spine chain: progressively weaker AngularServos.
-    // Legs/arms/head: fully dynamic — gravity + joints handle them naturally.
-    private readonly List<ConstraintHandle> standingConstraints = new();
-    private bool standingActive;
-    private BodyHandle? standingAnchorHandle;
-    private Vector3 standingAnchorTarget;
-
-    // ─── Wrist constraints ───────────────────────────────────────────────────
-
-    private readonly List<ConstraintHandle> wristConstraints = new();
-    private float wristForce = 500f;
-    private float wristFreq  = 80f;
-
     // Each joint's angular motor drives the parent/child relative angular velocity to zero with
     // unlimited force, and a SwingLimit caps the cone the child may swing into — together they make
     // a recoil kick invisible. For a brief window we drop the motor force AND widen the swing limit
@@ -512,12 +464,7 @@ public unsafe partial class Ragdoll : IDisposable
 
     // ─────────────────────────────────────────────────────────────────────────
 
-    private BodyHandle? FindBodyHandle(string boneName)
-    {
-        foreach (var rb in ragdollBones)
-            if (rb.Name == boneName) return rb.BodyHandle;
-        return null;
-    }
+    private BodyHandle? FindBodyHandle(string boneName) => ctx.FindBodyHandle(boneName);
 
     /// <summary>Deactivates and frees everything; a host that subscribed the entry points unsubscribes after this.</summary>
     public virtual void Dispose()

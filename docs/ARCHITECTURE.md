@@ -164,3 +164,17 @@ Components so far:
 <!-- a6-2: the three rows above. The capture of a body surface (bone definitions, mod soft-tissue bones, severed
 limbs) stays in the ragdoll; the components reach it through CoreCalls. The nested type is `MeshVolumes`, not
 `MeshVolume`, so that it does not hide the namespace AdvancedRagdoll.MeshVolume inside Ragdoll. -->
+| `Ground` | `Ragdoll.Ground.cs` | the ground height (physics and real), the ground patches laid so far and their size, the scratch list for the exact ground triangles |
+| `StandingSupport` | `Ragdoll.StandingSupport.cs` | the standing hold's constraints, anchor body and target, whether it is up; the wrist constraints and their force and frequency |
+| `Grab` | `Ragdoll.Grab.cs` | the grab slots and the next slot id, the grabber whose collision is parked during a grab |
+| `Impacts` | `Ragdoll.Impacts.cs` | the hitstop and cooldown timers, the last torso descent speed, the torso body indices, the jitter random state |
+| `WeaponStrike` | `Ragdoll.Strikes.cs` | the strike window (timer, power, striking colliders), the blade's last sample, the bodies struck this swing |
+
+<!-- a6-3 -->
+Since A6-3 the context also holds whether the ragdoll is active, the rig's total mass, the active class profile and a
+body lookup by bone name; `CoreCalls` also carries the start of the settle window (stepping loop) and the carrying of
+worn external rigs with the standing hold (external bodies). Where a component would need another subsystem's state or a
+recorded API call, the ragdoll's own method does that step and passes the value in (for example whether a grab or the
+standing support holds the rig, or the attachment a grab resolved), so the components do not reference each other.
+The ragdoll's direct pokes (impulse, angular kick, punt, shake), the joint release after a recoil or a landing (joint
+state), the carrying of external rigs and the grab-attachment queries stay with the ragdoll for now.

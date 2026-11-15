@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using BepuPhysics;
 using BepuPhysics.Constraints;
@@ -164,32 +165,24 @@ public unsafe partial class Ragdoll
     // the attacker on the retract phase).
     private const float StrikeUpBias = 0.3f;
 
-    private Vector3 StrikeImpulse(Vector3 bodyPos, Vector3 contactPoint, float swingSpeed)
-    {
-        var away = new Vector3(bodyPos.X - contactPoint.X, 0f, bodyPos.Z - contactPoint.Z);
-        var dir = away.LengthSquared() > 1e-6f ? Vector3.Normalize(away) : Vector3.UnitX;
-        return (dir + Vector3.UnitY * StrikeUpBias) * (swingSpeed * strikePower);
-    }
+    private const float WeaponStrikeRadius = 0.55f; // generous around the blade line (weapons are thin)
+
+    // The strike window (Ragdoll.Strikes.cs).
+    private readonly WeaponStrike strike;
+
+    // Monster strike: during the attack window the monster's collider bones impart their swing
+    // velocity as an impulse to nearby ragdoll bodies (a fast swing = a heavy hit, at the limb's
+    // real contact point).
+    private float attackStrikeTimer { get => strike.AttackStrikeTimer; set => strike.AttackStrikeTimer = value; }
+    private float strikePower { get => strike.StrikePower; set => strike.StrikePower = value; }
+    private nint strikeColliderAddress { get => strike.ColliderAddress; set => strike.ColliderAddress = value; }
+    private HashSet<nint> strikeColliderAddresses => strike.ColliderAddresses;
+    private bool weaponPrevValid { get => strike.WeaponPrevValid; set => strike.WeaponPrevValid = value; }
+    private HashSet<int> struckThisWindow => strike.StruckThisWindow;
 
     /// <summary>Impart a swing as an impulse to ragdoll bodies near <paramref name="point"/>.</summary>
     private void ApplyStrikeImpulse(Vector3 point, Vector3 swingVel, float radius)
-    {
-        if (simulation == null) return;
-        if (standingActive) return;
-        var speed = swingVel.Length();
-        var radiusSq = radius * radius;
-        foreach (var rb in ragdollBones)
-        {
-            var bodyRef = simulation.Bodies.GetBodyReference(rb.BodyHandle);
-            var p = bodyRef.Pose.Position;
-            if (Vector3.DistanceSquared(p, point) > radiusSq) continue;
-            if (!struckThisWindow.Add(rb.BodyHandle.Value)) continue; // one hit per swing
-            bodyRef.Velocity.Linear += StrikeImpulse(p, point, speed);
-            bodyRef.Awake = true;
-        }
-    }
-
-    private const float WeaponStrikeRadius = 0.55f; // generous around the blade line (weapons are thin)
+        => strike.ApplyImpulse(point, swingVel, radius, standingActive);
 
     /// <summary>
     /// A humanoid's weapon is a separate draw object, so it isn't in the bone collision capsules.
@@ -202,43 +195,114 @@ public unsafe partial class Ragdoll
         if (simulation == null || strikeColliderAddress == nint.Zero) { weaponPrevValid = false; return; }
         if (!colliders.TryGetWeaponTransform(strikeColliderAddress, out var center, out var rot)) { weaponPrevValid = false; return; }
         if (rec != null) RecWeaponSample(center, rot);
-        // Weapon-drop models the weapon as a Y-aligned capsule, so the blade runs along local Y.
-        // Sample both ends so the blade direction's sign doesn't matter.
-        var dir = Vector3.Transform(Vector3.UnitY, rot);
-        var half = MathF.Max(0.4f, RagdollTuning.WeaponDropHalfLength);
-        var a = center - dir * half;
-        var b = center + dir * half;
-
-        if (attackStrikeTimer > 0f && weaponPrevValid && dt > 0f)
-        {
-            var vel = ((a - prevBladeA) + (b - prevBladeB)) * (0.5f / dt);
-            if (vel.LengthSquared() > StrikeMinSpeed * StrikeMinSpeed)
-                ApplyStrikeImpulseSegment(a, b, vel, WeaponStrikeRadius);
-        }
-        prevBladeA = a;
-        prevBladeB = b;
-        weaponPrevValid = true;
+        strike.SweepWeapon(center, rot, dt, standingActive);
     }
 
-    /// <summary>Strike ragdoll bodies near the blade line segment a→b.</summary>
-    private void ApplyStrikeImpulseSegment(Vector3 a, Vector3 b, Vector3 swingVel, float radius)
+    private void CancelAttackStrikeCore() => strike.Cancel();
+
+    /// <summary>
+    /// The strike window: while it is open, the swing of the striking collider's bones and of its weapon's blade is
+    /// imparted to the ragdoll bodies it passes, each body at most once per swing. A component
+    /// (docs/ARCHITECTURE.md §8).
+    /// </summary>
+    private sealed class WeaponStrike
     {
-        if (simulation == null) return;
-        if (standingActive) return;
-        var speed = swingVel.Length();
-        var ab = b - a;
-        var abLenSq = ab.LengthSquared();
-        var radiusSq = radius * radius;
-        foreach (var rb in ragdollBones)
+        private readonly SimulationContext ctx;
+        internal WeaponStrike(SimulationContext ctx) { this.ctx = ctx; }
+
+        internal float AttackStrikeTimer;
+        internal float StrikePower;
+        internal nint ColliderAddress;
+        // Bone-driven swarm attacks may have several animated collider sources in one strike window.
+        // The single address above remains the optional weapon source; this set drives body bones.
+        internal readonly HashSet<nint> ColliderAddresses = new();
+        // Weapon strike: a humanoid's weapon is a separate draw object (not in the bone capsules), so
+        // track its blade endpoints to give a sword swing its own velocity-driven hit.
+        private Vector3 prevBladeA, prevBladeB;
+        internal bool WeaponPrevValid;
+        // Each body is struck at most once per swing — the window spans many frames, so striking every
+        // frame accumulated into a launch. One hit per swing makes strike power linear/predictable.
+        internal readonly HashSet<int> StruckThisWindow = new();
+
+        private Vector3 StrikeImpulse(Vector3 bodyPos, Vector3 contactPoint, float swingSpeed)
         {
-            var bodyRef = simulation.Bodies.GetBodyReference(rb.BodyHandle);
-            var p = bodyRef.Pose.Position;
-            var t = abLenSq > 1e-6f ? Math.Clamp(Vector3.Dot(p - a, ab) / abLenSq, 0f, 1f) : 0f;
-            var closest = a + ab * t;
-            if (Vector3.DistanceSquared(p, closest) > radiusSq) continue;
-            if (!struckThisWindow.Add(rb.BodyHandle.Value)) continue; // one hit per swing
-            bodyRef.Velocity.Linear += StrikeImpulse(p, closest, speed);
-            bodyRef.Awake = true;
+            var away = new Vector3(bodyPos.X - contactPoint.X, 0f, bodyPos.Z - contactPoint.Z);
+            var dir = away.LengthSquared() > 1e-6f ? Vector3.Normalize(away) : Vector3.UnitX;
+            return (dir + Vector3.UnitY * StrikeUpBias) * (swingSpeed * StrikePower);
+        }
+
+        /// <summary>Impart a swing as an impulse to ragdoll bodies near <paramref name="point"/>.
+        /// <paramref name="standingActive"/>: the standing support holds the rig.</summary>
+        internal void ApplyImpulse(Vector3 point, Vector3 swingVel, float radius, bool standingActive)
+        {
+            var simulation = ctx.Simulation;
+            if (simulation == null) return;
+            if (standingActive) return;
+            var speed = swingVel.Length();
+            var radiusSq = radius * radius;
+            foreach (var rb in ctx.Bodies)
+            {
+                var bodyRef = simulation.Bodies.GetBodyReference(rb.BodyHandle);
+                var p = bodyRef.Pose.Position;
+                if (Vector3.DistanceSquared(p, point) > radiusSq) continue;
+                if (!StruckThisWindow.Add(rb.BodyHandle.Value)) continue; // one hit per swing
+                bodyRef.Velocity.Linear += StrikeImpulse(p, point, speed);
+                bodyRef.Awake = true;
+            }
+        }
+
+        /// <summary>The blade at its sampled transform (<paramref name="center"/>, <paramref name="rot"/>): during
+        /// the attack window, its swing since the last sample strikes the bodies near it.</summary>
+        internal void SweepWeapon(Vector3 center, Quaternion rot, float dt, bool standingActive)
+        {
+            // Weapon-drop models the weapon as a Y-aligned capsule, so the blade runs along local Y.
+            // Sample both ends so the blade direction's sign doesn't matter.
+            var dir = Vector3.Transform(Vector3.UnitY, rot);
+            var half = MathF.Max(0.4f, RagdollTuning.WeaponDropHalfLength);
+            var a = center - dir * half;
+            var b = center + dir * half;
+
+            if (AttackStrikeTimer > 0f && WeaponPrevValid && dt > 0f)
+            {
+                var vel = ((a - prevBladeA) + (b - prevBladeB)) * (0.5f / dt);
+                if (vel.LengthSquared() > StrikeMinSpeed * StrikeMinSpeed)
+                    ApplyImpulseSegment(a, b, vel, WeaponStrikeRadius, standingActive);
+            }
+            prevBladeA = a;
+            prevBladeB = b;
+            WeaponPrevValid = true;
+        }
+
+        /// <summary>Strike ragdoll bodies near the blade line segment a→b.</summary>
+        private void ApplyImpulseSegment(Vector3 a, Vector3 b, Vector3 swingVel, float radius, bool standingActive)
+        {
+            var simulation = ctx.Simulation;
+            if (simulation == null) return;
+            if (standingActive) return;
+            var speed = swingVel.Length();
+            var ab = b - a;
+            var abLenSq = ab.LengthSquared();
+            var radiusSq = radius * radius;
+            foreach (var rb in ctx.Bodies)
+            {
+                var bodyRef = simulation.Bodies.GetBodyReference(rb.BodyHandle);
+                var p = bodyRef.Pose.Position;
+                var t = abLenSq > 1e-6f ? Math.Clamp(Vector3.Dot(p - a, ab) / abLenSq, 0f, 1f) : 0f;
+                var closest = a + ab * t;
+                if (Vector3.DistanceSquared(p, closest) > radiusSq) continue;
+                if (!StruckThisWindow.Add(rb.BodyHandle.Value)) continue; // one hit per swing
+                bodyRef.Velocity.Linear += StrikeImpulse(p, closest, speed);
+                bodyRef.Awake = true;
+            }
+        }
+
+        internal void Cancel()
+        {
+            AttackStrikeTimer = 0f;
+            StrikePower = 0f;
+            ColliderAddresses.Clear();
+            StruckThisWindow.Clear();
+            WeaponPrevValid = false;
         }
     }
 
@@ -254,15 +318,6 @@ public unsafe partial class Ragdoll
             if (best == null || d < best.Value) best = d;
         }
         return best;
-    }
-
-    private void CancelAttackStrikeCore()
-    {
-        attackStrikeTimer = 0f;
-        strikePower = 0f;
-        strikeColliderAddresses.Clear();
-        struckThisWindow.Clear();
-        weaponPrevValid = false;
     }
 
 
