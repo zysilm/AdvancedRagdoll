@@ -96,7 +96,7 @@ public unsafe partial class Ragdoll
         targetIsLocalPlayer = actors.GetObjectIndex(characterAddress) == 0;
 
         // Fit the collision hulls now, on a worker, so they are ready when physics starts.
-        PrewarmStructuralMeshFits();
+        structuralFit.Prewarm();
         ArmConfiguredGuidedCollapse();
         RecBeginActivation(delay, mode, stagger);
 
@@ -363,7 +363,7 @@ public unsafe partial class Ragdoll
         weaponPrevValid = false;
         simulation?.Dispose();
         simulation = null;
-        ReleaseMeshDispatcher();
+        meshVolumes.ReleaseMeshDispatcher();
         bufferPool?.Clear();
         bufferPool = null;
     }

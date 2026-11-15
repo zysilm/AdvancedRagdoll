@@ -123,5 +123,14 @@ public unsafe partial class Ragdoll
         /// <summary>How far the render frame is between the last two physics steps (1 before the first step).</summary>
         internal float PhysicsInterpolation =>
             owner.hasPrevPhysicsState ? System.Math.Clamp(owner.physicsAccumulator / FixedTimestep, 0, 1) : 1;
+
+        // a6-2
+        internal void RecMeshLod(string site, string bone, MeshCollisionLodResult lod) => owner.RecMeshLod(site, bone, lod);
+        /// <summary>The recorded outcome of the structural fit (1 none, 2 not ready, 3 fitted, 4 failed).</summary>
+        internal void RecFitOutcome(int outcome) => owner.recFitOutcome = outcome;
+        internal FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address) => owner.CaptureFrozenMeshCache(address);
+        internal bool IsActive => owner.isActive;
+        internal bool TargetObjectAlive() => owner.TargetObjectAlive();
+        internal bool RunAnimatedHair => owner.RunAnimatedHair;
     }
 }

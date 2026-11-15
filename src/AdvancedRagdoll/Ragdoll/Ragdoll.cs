@@ -198,10 +198,6 @@ public unsafe partial class Ragdoll : IDisposable
     // generated from the real skeleton topology (see BuildGenericSkeletonDefs).
     // StepAndApply reads capsule extents from here instead of re-deriving the human set.
     private readonly Dictionary<string, RagdollBoneDef> activeDefByName = new();
-    // Lightweight final-collision surface cache shared by traversal, grabbing, debug drawing,
-    // and the actual accepted per-bone collision shapes. It follows the
-    // already-existing rigid bodies, so updating it is allocation-free and never touches model file data.
-    private CharacterSurfaceRuntime? characterSurfaceRuntime;
 
     // True while the active ragdoll was built by the generic (non-humanoid) path.
     // Generic rigs get extra stabilization (more solver iterations + velocity clamp)
@@ -414,6 +410,10 @@ public unsafe partial class Ragdoll : IDisposable
         water = new Water(ctx);
         weaponContact = new WeaponContactSurfaces(ctx);
         hairRig = new HairRig(ctx);
+        // a6-2
+        meshVolumes = new MeshVolumes(ctx);
+        structuralFit = new StructuralFit(ctx);
+        surfaceRuntime = new SurfaceRuntime(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }
@@ -523,8 +523,7 @@ public unsafe partial class Ragdoll : IDisposable
     public virtual void Dispose()
     {
         Deactivate();
-        frozenMeshCache?.Dispose(); frozenMeshCache = null;
-        ClearWeaponContactMeshes();
+        meshVolumes.DisposeCaches();
         hairRig.Remove();
     }
 }

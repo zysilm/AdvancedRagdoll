@@ -26,7 +26,7 @@ public unsafe partial class Ragdoll
             log.Error(ex, "Ragdoll: the settings could not be read; this frame is skipped");
             return;
         }
-        try { UpdateFrozenMeshCache(); }
+        try { meshVolumes.UpdateFrozenMeshCache(); }
         catch (Exception ex) { log.Warning(ex, "Frozen collision cache capture failed; retrying when the model is ready."); }
         if (!isActive)
         {
@@ -702,7 +702,7 @@ public unsafe partial class Ragdoll
                 CapturePrevBodyPoses(boneCount);
                 hasPrevPhysicsState = true;
                 DriveGrabConstraints(FixedTimestep); // advance finite-force targets before solve
-                ApplyCachedMeshLod();
+                meshVolumes.ApplyCachedMeshLod();
                 ApplyFallGravity(FixedTimestep); // a descent that bites, on top of the integrator's honest g
                 water.ApplyForces(FixedTimestep);
                 var steppedExternally = false;
@@ -710,7 +710,7 @@ public unsafe partial class Ragdoll
                 if (!steppedExternally) StepPhysicsSimulation(FixedTimestep);
                 ClampVelocities(maxLinear, maxAngular);
                 ApplyStandingAnchorCorrection();
-                UpdateCharacterSurfaceRuntime();
+                surfaceRuntime.Update();
                 hairRig.Step(); // one-way guides follow the accepted head pose
                 DetectImpact(FixedTimestep);
                 if (rec != null) RecStep(substeps, steppedExternally);
@@ -735,7 +735,7 @@ public unsafe partial class Ragdoll
                     break;
                 }
             }
-            ReportMeshPhysicsBudget(meshFrameStart, substeps);
+            meshVolumes.ReportMeshPhysicsBudget(meshFrameStart, substeps);
             // If we hit the substep cap (severe hitch / very low fps), drop the backlog so
             // we don't fire a burst of catch-up steps on the next frame (spiral of death).
             if (substeps == substepCap)
@@ -752,7 +752,7 @@ public unsafe partial class Ragdoll
         // Snap any soft-tissue body that diverged/NaN'd this frame back onto its anchor
         // BEFORE the write-back reads body poses — flung flesh must never reach the mesh.
         ContainSoftTissueBodies();
-        UpdateCharacterSurfaceRuntime();
+        surfaceRuntime.Update();
 
         if (biomechanicalSettleRemaining > 0f)
             biomechanicalSettleRemaining = MathF.Max(0f, biomechanicalSettleRemaining - dt);

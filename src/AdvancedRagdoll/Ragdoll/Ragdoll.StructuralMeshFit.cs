@@ -25,78 +25,93 @@ public unsafe partial class Ragdoll
 
     private static readonly Dictionary<string, StructuralMeshFitter.Fit> NoStructuralFits = new(StringComparer.Ordinal);
 
-    private Task<StructuralFitResult>? structuralFitTask;
+    // The fitted collision hulls (Ragdoll.StructuralMeshFit.cs).
+    private readonly StructuralFit structuralFit;
 
-    /// <summary>Starts fitting the target's collision hulls, if that has not been done for its appearance.</summary>
-    private void PrewarmStructuralMeshFits()
+    /// <summary>
+    /// The collision hulls fitted to the target's own models: the fit started when the ragdoll is armed (the mesh
+    /// source reads the models and fits them on a worker), collected when the rig is built, and the hull shapes made
+    /// from it. A component (docs/ARCHITECTURE.md §8).
+    /// </summary>
+    private sealed class StructuralFit
     {
-        structuralFitTask = null;
-        try
-        {
-            var skel = skeletons.TryGetSkeleton(targetCharacterAddress);
-            if (skel != null)
-                structuralFitTask = StartStructuralMeshFit(skel);
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "Ragdoll mesh geometry: could not start the fit; built-in volumes will be used.");
-        }
-    }
+        private readonly SimulationContext ctx;
+        private Task<StructuralFitResult>? structuralFitTask;
 
-    /// <summary>The fitted volumes for the target, or none: every body then keeps its built-in volume.</summary>
-    private Dictionary<string, StructuralMeshFitter.Fit> ResolveStructuralMeshFits(IHostSkeleton skel)
-    {
-        try
+        internal StructuralFit(SimulationContext ctx) { this.ctx = ctx; }
+
+        /// <summary>Starts fitting the target's collision hulls, if that has not been done for its appearance.</summary>
+        internal void Prewarm()
         {
-            var task = structuralFitTask ?? StartStructuralMeshFit(skel);
             structuralFitTask = null;
-            if (task == null)
+            try
             {
-                if (rec != null) recFitOutcome = 1;
+                var skel = ctx.Skeletons.TryGetSkeleton(ctx.TargetCharacterAddress);
+                if (skel != null)
+                    structuralFitTask = Start(skel);
+            }
+            catch (Exception ex)
+            {
+                ctx.Log.Warning(ex, "Ragdoll mesh geometry: could not start the fit; built-in volumes will be used.");
+            }
+        }
+
+        /// <summary>The fitted volumes for the target, or none: every body then keeps its built-in volume.
+        /// <paramref name="scheduler"/> is the ragdoll's scheduler, which waits for the fit.</summary>
+        internal Dictionary<string, StructuralMeshFitter.Fit> Resolve(IHostSkeleton skel, IRagdollScheduler scheduler)
+        {
+            try
+            {
+                var task = structuralFitTask ?? Start(skel);
+                structuralFitTask = null;
+                if (task == null)
+                {
+                    if (ctx.Core.Recording) ctx.Core.RecFitOutcome(1);
+                    return NoStructuralFits;
+                }
+
+                // Normally long finished. With no activation delay the first death of an appearance
+                // waits here once, briefly; past that the built-in volumes are better than a stall.
+                if (!scheduler.TryWait(task, 150, out var result))
+                {
+                    ctx.Log.Info("Ragdoll mesh geometry: fit not ready yet; built-in volumes used for this ragdoll.");
+                    if (ctx.Core.Recording) ctx.Core.RecFitOutcome(2);
+                    return NoStructuralFits;
+                }
+                if (ctx.Core.Recording) ctx.Core.RecFitOutcome(3);
+                ctx.Log.Info($"Ragdoll mesh geometry: {result.Summary}");
+                return result.Fits;
+            }
+            catch (Exception ex)
+            {
+                ctx.Log.Warning(ex, "Ragdoll mesh geometry: fit failed; built-in volumes used.");
+                if (ctx.Core.Recording) ctx.Core.RecFitOutcome(4);
                 return NoStructuralFits;
             }
+        }
 
-            // Normally long finished. With no activation delay the first death of an appearance
-            // waits here once, briefly; past that the built-in volumes are better than a stall.
-            if (!scheduler.TryWait(task, 150, out var result))
+        /// <summary>Starts the hull fit: the mesh source reads the target's models now and fits them on a worker.</summary>
+        private Task<StructuralFitResult>? Start(IHostSkeleton skel)
+            => ctx.Meshes.StartStructuralFit(ctx.TargetCharacterAddress, skel);
+
+        internal bool TryCreateHull(Vector3[] hullPoints, float scale, out ConvexHull hull, out Vector3 center,
+            out Vector3[] corners, out Vector3[] edges)
+        {
+            hull = default;
+            center = default;
+            corners = Array.Empty<Vector3>();
+            edges = Array.Empty<Vector3>();
+            if (ctx.BufferPool == null)
+                return false;
+            try
             {
-                log.Info("Ragdoll mesh geometry: fit not ready yet; built-in volumes used for this ragdoll.");
-                if (rec != null) recFitOutcome = 2;
-                return NoStructuralFits;
+                return StructuralHullShape.TryCreate(hullPoints, scale, ctx.BufferPool, out hull, out center, out corners, out edges);
             }
-            if (rec != null) recFitOutcome = 3;
-            log.Info($"Ragdoll mesh geometry: {result.Summary}");
-            return result.Fits;
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "Ragdoll mesh geometry: fit failed; built-in volumes used.");
-            if (rec != null) recFitOutcome = 4;
-            return NoStructuralFits;
-        }
-    }
-
-    /// <summary>Starts the hull fit: the mesh source reads the target's models now and fits them on a worker.</summary>
-    private Task<StructuralFitResult>? StartStructuralMeshFit(IHostSkeleton skel)
-        => meshes.StartStructuralFit(targetCharacterAddress, skel);
-
-    private bool TryCreateStructuralHull(Vector3[] hullPoints, float scale, out ConvexHull hull, out Vector3 center,
-        out Vector3[] corners, out Vector3[] edges)
-    {
-        hull = default;
-        center = default;
-        corners = Array.Empty<Vector3>();
-        edges = Array.Empty<Vector3>();
-        if (bufferPool == null)
-            return false;
-        try
-        {
-            return StructuralHullShape.TryCreate(hullPoints, scale, bufferPool, out hull, out center, out corners, out edges);
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "Ragdoll mesh geometry: hull construction failed; envelope used.");
-            return false;
+            catch (Exception ex)
+            {
+                ctx.Log.Warning(ex, "Ragdoll mesh geometry: hull construction failed; envelope used.");
+                return false;
+            }
         }
     }
 

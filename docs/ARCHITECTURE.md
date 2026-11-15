@@ -157,3 +157,10 @@ Components so far:
 | `Water` | `Ragdoll.Water.cs` | the water level over the corpse, the probe timer and position, the wave clock, whether a body is in the water |
 | `WeaponContactSurfaces` | `Ragdoll.WeaponContactMesh.cs` | the kinematic surface twins a weapon rests on, and the three contact filter sets for them |
 | `HairRig` | `Ragdoll.HairRig.cs`, `Ragdoll.HairSurfaces.cs` | the hair guide chains, live (animated) hair, the body surfaces and ground samples the hair rests on |
+| `MeshVolumes` | `Ragdoll.MeshVolume.cs`, `Ragdoll.MeshCache.cs`, `Ragdoll.MeshDeformation.cs`, `Ragdoll.MeshExecution.cs` | the frozen body surfaces the controller carries over activations (its target's, and other actors' for weapon contacts) with their LOD settings, the mesh bodies built from them, the collision LODs swapped in while stepping, the shared-worker lease and the mesh step timings, the mesh status text |
+| `StructuralFit` | `Ragdoll.StructuralMeshFit.cs` | the hull fit started when the ragdoll is armed, and the hull shapes made from it |
+| `SurfaceRuntime` | `Ragdoll.Surface.cs` | the query copy of the accepted collision proxy (traversal, grabbing, debug drawing) |
+
+<!-- a6-2: the three rows above. The capture of a body surface (bone definitions, mod soft-tissue bones, severed
+limbs) stays in the ragdoll; the components reach it through CoreCalls. The nested type is `MeshVolumes`, not
+`MeshVolume`, so that it does not hide the namespace AdvancedRagdoll.MeshVolume inside Ragdoll. -->

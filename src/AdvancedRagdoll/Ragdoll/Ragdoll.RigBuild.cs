@@ -210,7 +210,7 @@ public unsafe partial class Ragdoll
         if (settings.RagdollMeshVolumes && !genericSkeleton)
         {
             CollisionWorkBudget.Register(simulation.NarrowPhase.CollisionTaskRegistry, () => settings.RagdollMeshContactQuality);
-            InitializeMeshTiming();
+            meshVolumes.InitializeMeshTiming();
         }
 
         // Safety net: flat box well below the character prevents infinite falling
@@ -329,12 +329,12 @@ public unsafe partial class Ragdoll
         // a measured axis/length, but joint anchors and topology remain on the skeleton pivots.
         if (rec != null) RecMeshCache(frozenMeshCache, "body");
         var bodyMeshVolumes = settings.RagdollMeshVolumes && !genericSkeleton
-            ? BuildBodyMeshVolumes(skel, defByName, nameToIndex, boneWorldPositions, boneWorldRotations)
+            ? meshVolumes.BuildBodyMeshVolumes(skel, defByName, nameToIndex, boneWorldPositions, boneWorldRotations)
             : new Dictionary<int, BodyMeshGeometry>();
         if (!settings.RagdollMeshVolumes) MeshGeometryStatus = "Rendered mesh collision disabled";
         var structuralMeshFits = !genericSkeleton &&
                                  ReadCharacterSurfaceIdentity().IsHumanoid
-            ? ResolveStructuralMeshFits(skel)
+            ? structuralFit.Resolve(skel, scheduler)
             : new Dictionary<string, StructuralMeshFitter.Fit>(StringComparer.Ordinal);
         if (rec != null) RecStructuralFits(structuralMeshFits);
 
@@ -570,7 +570,7 @@ public unsafe partial class Ragdoll
             BodyMeshGeometry? meshVolume = null;
             MeshCollisionLodResult? meshLod = null;
             if (bodyMeshVolumes.TryGetValue(boneIdx, out var worldMesh) &&
-                TryCreateBodyMesh(def.Name, worldMesh, boneWorldPos, capsuleWorldRot, effectiveMass,
+                meshVolumes.TryCreateBodyMesh(def.Name, worldMesh, boneWorldPos, capsuleWorldRot, effectiveMass,
                     out shapeIndex, out bodyInertia, out var meshCenter, out var localMesh, out meshLod))
             {
                 meshVolume = localMesh;
@@ -594,7 +594,7 @@ public unsafe partial class Ragdoll
             Vector3[]? hullCorners = null;
             Vector3[]? hullEdges = null;
             if (meshVolume == null && useStructuralMeshGeometry && meshGeometry.HullPoints != null &&
-                TryCreateStructuralHull(meshGeometry.HullPoints, ragdollShapeScale, out var hull, out var hullCenter,
+                structuralFit.TryCreateHull(meshGeometry.HullPoints, ragdollShapeScale, out var hull, out var hullCenter,
                     out var createdCorners, out var createdEdges))
             {
                 hullCorners = createdCorners;
@@ -831,7 +831,7 @@ public unsafe partial class Ragdoll
 
         // Build one compact final-collision surface cache after the rigid bodies exist. It uses
         // their real scaled dimensions and follows those same poses for every consumer.
-        BuildCharacterSurfaceRuntime(genericSkeleton);
+        surfaceRuntime.Build(genericSkeleton, activeDefByName);
 
         // The bodies that actually arrive when this rig lands. Empty on a rig with no recognisable torso
         // (a non-humanoid), and IsTorsoBody then falls back to treating every body as one.

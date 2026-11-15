@@ -12,9 +12,12 @@ namespace AdvancedRagdoll;
 
 public unsafe partial class Ragdoll
 {
-    private bool activeRagdollMeshVolumes;
+    // The body's rendered-mesh collision: the frozen surface caches, the mesh bodies built from them and their
+    // stepping (Ragdoll.MeshVolume.cs, .MeshCache.cs, .MeshDeformation.cs, .MeshExecution.cs).
+    private readonly MeshVolumes meshVolumes;
+    private bool activeRagdollMeshVolumes { get => meshVolumes.Active; set => meshVolumes.Active = value; }
     internal int MeshGeometryGeneration => externalBodyGeneration;
-    internal string MeshGeometryStatus { get; private set; } = "No rendered mesh captured";
+    internal string MeshGeometryStatus { get => meshVolumes.Status; private set => meshVolumes.Status = value; }
 
     internal bool IsMeshBody(string boneName)
     {
@@ -48,22 +51,6 @@ public unsafe partial class Ragdoll
         if (!characterSurfaceRuntime.TryGetVerticalSupport(point, radius, boneName, out var y, out _)) return false;
         surface = new Vector3(point.X, y - radius, point.Z);
         return true;
-    }
-
-    private Dictionary<int, BodyMeshGeometry> BuildBodyMeshVolumes(IHostSkeleton skel,
-        IReadOnlyDictionary<string, RagdollBoneDef> definitions,
-        IReadOnlyDictionary<string, int> activeIndices,
-        IReadOnlyDictionary<string, Vector3> bonePositions,
-        IReadOnlyDictionary<string, Quaternion> boneRotations)
-    {
-        var result = new Dictionary<int, BodyMeshGeometry>();
-        if (frozenMeshCache == null) return result;
-        foreach (var entry in activeIndices)
-            if (bonePositions.TryGetValue(entry.Key, out var origin) && boneRotations.TryGetValue(entry.Key, out var rotation) &&
-                frozenMeshCache.TryCreateWorld(entry.Key, origin, rotation, out var geometry))
-                result[entry.Value] = geometry;
-        MeshGeometryStatus = $"Frozen cached mesh: {result.Count} body regions; manual refresh, no live skin/refit";
-        return result;
     }
 
     private Dictionary<int, BodyMeshGeometry> CaptureBodyMeshVolumes(nint address, IHostSkeleton skel,
@@ -143,62 +130,94 @@ public unsafe partial class Ragdoll
         }
     }
 
-    private bool TryCreateBodyMesh(string boneName, BodyMeshGeometry worldGeometry, Vector3 boneOrigin,
-        Quaternion bodyRotation, float mass, out TypedIndex shapeIndex, out BodyInertia inertia,
-        out Vector3 center, out BodyMeshGeometry localGeometry, out MeshCollisionLodResult? collisionLod)
+    /// <summary>
+    /// The body's rendered-mesh collision: the frozen bone-local surfaces this controller caches (its own target and,
+    /// for weapon contacts, other actors), the triangle-mesh bodies built from them at activation, the collision LODs
+    /// swapped in while stepping, and the worker lease and timing of the mesh steps. A component
+    /// (docs/ARCHITECTURE.md §8).
+    /// </summary>
+    private sealed partial class MeshVolumes
     {
-        shapeIndex = default; inertia = default; center = boneOrigin; localGeometry = null!;
-        collisionLod = null;
-        if (simulation == null || bufferPool == null) return false;
-        Mesh mesh = default;
-        bool created = false;
-        Buffer<Triangle> triangles = default;
-        try
-        {
-            var inverseRotation = Quaternion.Inverse(bodyRotation);
-            var points = new Vector3[worldGeometry.Vertices.Length];
-            for (int i = 0; i < points.Length; i++)
-                points[i] = Vector3.Transform(worldGeometry.Vertices[i] - boneOrigin, inverseRotation);
-            // Body partitions are open at joints. Use surface mass rather than pretending they
-            // are watertight solids. Two-sided triangles handle imported winding and reflected mods.
-            var indices = worldGeometry.Indices;
-            bufferPool.Take<Triangle>(indices.Length / 3 * 2, out triangles);
-            for (int i = 0; i < indices.Length; i += 3)
-            {
-                var a = points[indices[i]]; var b = points[indices[i + 1]]; var c = points[indices[i + 2]];
-                triangles[i / 3 * 2] = new Triangle(a, b, c);
-                triangles[i / 3 * 2 + 1] = new Triangle(a, c, b);
-            }
-            mesh = new Mesh(triangles, Vector3.One, bufferPool);
-            created = true;
-            // This overload recenters BEPU's triangles. Apply its returned shift exactly once
-            // to our query vertices and to BodyToBone, leaving every anatomical anchor unchanged.
-            inertia = mesh.ComputeOpenInertia(mass, out var localCenter);
-            var tensor = inertia.InverseInertiaTensor;
-            if (!IsFinite(localCenter) || !float.IsFinite(tensor.XX + tensor.YY + tensor.ZZ) ||
-                tensor.XX <= 0f || tensor.YY <= 0f || tensor.ZZ <= 0f)
-                throw new InvalidOperationException("Degenerate body surface inertia.");
-            for (int i = 0; i < points.Length; i++) points[i] -= localCenter;
-            localGeometry = new BodyMeshGeometry(points, indices, worldGeometry.SourceBindings);
-            if (settings.RagdollMeshCollisionLod && frozenMeshCache != null &&
-                meshes.TryCreateLod(frozenMeshCache, Hosting.CachedLodUse.Init, boneName, localGeometry, out var cachedLod))
-            {
-                var reduced = CreateBodyTriangleMesh(cachedLod.Geometry);
-                mesh.Dispose(bufferPool); mesh = reduced; collisionLod = cachedLod;
-                if (rec != null) RecMeshLod("init", boneName, cachedLod);
-            }
-            center = boneOrigin + Vector3.Transform(localCenter, bodyRotation);
-            shapeIndex = simulation.Shapes.Add(mesh);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            if (created) mesh.Dispose(bufferPool);
-            else if (triangles.Allocated) bufferPool.Return(ref triangles);
-            log.Warning(ex, "Ragdoll body mesh rejected; preserving legacy shape for this region.");
-            return false;
-        }
-    }
+        private readonly SimulationContext ctx;
+        internal MeshVolumes(SimulationContext ctx) { this.ctx = ctx; }
 
-    private Mesh CreateBodyTriangleMesh(BodyMeshGeometry geometry) => TwoSidedMesh.Create(geometry, bufferPool!);
+        /// <summary>Mesh volumes were on when the active rig was built.</summary>
+        internal bool Active;
+        internal string Status = "No rendered mesh captured";
+
+        internal Dictionary<int, BodyMeshGeometry> BuildBodyMeshVolumes(IHostSkeleton skel,
+            IReadOnlyDictionary<string, RagdollBoneDef> definitions,
+            IReadOnlyDictionary<string, int> activeIndices,
+            IReadOnlyDictionary<string, Vector3> bonePositions,
+            IReadOnlyDictionary<string, Quaternion> boneRotations)
+        {
+            var result = new Dictionary<int, BodyMeshGeometry>();
+            if (frozenMeshCache == null) return result;
+            foreach (var entry in activeIndices)
+                if (bonePositions.TryGetValue(entry.Key, out var origin) && boneRotations.TryGetValue(entry.Key, out var rotation) &&
+                    frozenMeshCache.TryCreateWorld(entry.Key, origin, rotation, out var geometry))
+                    result[entry.Value] = geometry;
+            Status = $"Frozen cached mesh: {result.Count} body regions; manual refresh, no live skin/refit";
+            return result;
+        }
+
+        internal bool TryCreateBodyMesh(string boneName, BodyMeshGeometry worldGeometry, Vector3 boneOrigin,
+            Quaternion bodyRotation, float mass, out TypedIndex shapeIndex, out BodyInertia inertia,
+            out Vector3 center, out BodyMeshGeometry localGeometry, out MeshCollisionLodResult? collisionLod)
+        {
+            shapeIndex = default; inertia = default; center = boneOrigin; localGeometry = null!;
+            collisionLod = null;
+            if (ctx.Simulation == null || ctx.BufferPool == null) return false;
+            Mesh mesh = default;
+            bool created = false;
+            Buffer<Triangle> triangles = default;
+            try
+            {
+                var inverseRotation = Quaternion.Inverse(bodyRotation);
+                var points = new Vector3[worldGeometry.Vertices.Length];
+                for (int i = 0; i < points.Length; i++)
+                    points[i] = Vector3.Transform(worldGeometry.Vertices[i] - boneOrigin, inverseRotation);
+                // Body partitions are open at joints. Use surface mass rather than pretending they
+                // are watertight solids. Two-sided triangles handle imported winding and reflected mods.
+                var indices = worldGeometry.Indices;
+                ctx.BufferPool.Take<Triangle>(indices.Length / 3 * 2, out triangles);
+                for (int i = 0; i < indices.Length; i += 3)
+                {
+                    var a = points[indices[i]]; var b = points[indices[i + 1]]; var c = points[indices[i + 2]];
+                    triangles[i / 3 * 2] = new Triangle(a, b, c);
+                    triangles[i / 3 * 2 + 1] = new Triangle(a, c, b);
+                }
+                mesh = new Mesh(triangles, Vector3.One, ctx.BufferPool);
+                created = true;
+                // This overload recenters BEPU's triangles. Apply its returned shift exactly once
+                // to our query vertices and to BodyToBone, leaving every anatomical anchor unchanged.
+                inertia = mesh.ComputeOpenInertia(mass, out var localCenter);
+                var tensor = inertia.InverseInertiaTensor;
+                if (!IsFinite(localCenter) || !float.IsFinite(tensor.XX + tensor.YY + tensor.ZZ) ||
+                    tensor.XX <= 0f || tensor.YY <= 0f || tensor.ZZ <= 0f)
+                    throw new InvalidOperationException("Degenerate body surface inertia.");
+                for (int i = 0; i < points.Length; i++) points[i] -= localCenter;
+                localGeometry = new BodyMeshGeometry(points, indices, worldGeometry.SourceBindings);
+                if (ctx.Settings.RagdollMeshCollisionLod && frozenMeshCache != null &&
+                    ctx.Meshes.TryCreateLod(frozenMeshCache, Hosting.CachedLodUse.Init, boneName, localGeometry, out var cachedLod))
+                {
+                    var reduced = CreateBodyTriangleMesh(cachedLod.Geometry);
+                    mesh.Dispose(ctx.BufferPool); mesh = reduced; collisionLod = cachedLod;
+                    if (ctx.Core.Recording) ctx.Core.RecMeshLod("init", boneName, cachedLod);
+                }
+                center = boneOrigin + Vector3.Transform(localCenter, bodyRotation);
+                shapeIndex = ctx.Simulation.Shapes.Add(mesh);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                if (created) mesh.Dispose(ctx.BufferPool);
+                else if (triangles.Allocated) ctx.BufferPool.Return(ref triangles);
+                ctx.Log.Warning(ex, "Ragdoll body mesh rejected; preserving legacy shape for this region.");
+                return false;
+            }
+        }
+
+        private Mesh CreateBodyTriangleMesh(BodyMeshGeometry geometry) => TwoSidedMesh.Create(geometry, ctx.BufferPool!);
+    }
 }

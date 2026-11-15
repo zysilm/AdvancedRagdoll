@@ -13,6 +13,10 @@ namespace AdvancedRagdoll;
 
 public unsafe partial class Ragdoll
 {
+    // The final collision-proxy surface (Ragdoll.Surface.cs).
+    private readonly SurfaceRuntime surfaceRuntime;
+    private CharacterSurfaceRuntime? characterSurfaceRuntime { get => surfaceRuntime.Runtime; set => surfaceRuntime.Runtime = value; }
+
     /// <summary>The resolved race/body profile used by this corpse, if it has a supported humanoid identity.</summary>
     internal string? ActiveCharacterSurfaceProfileName => characterSurfaceRuntime?.Profile.Name;
 
@@ -69,82 +73,99 @@ public unsafe partial class Ragdoll
             modelCharaId);
     }
 
-    private void BuildCharacterSurfaceRuntime(bool genericSkeleton)
+    /// <summary>
+    /// The lightweight query copy of the collision proxy the rig actually accepted, shared by traversal, grabbing and
+    /// debug drawing; it follows the ragdoll's bodies. A component (docs/ARCHITECTURE.md §8).
+    /// </summary>
+    private sealed class SurfaceRuntime
     {
-        characterSurfaceRuntime = null;
-        if (genericSkeleton || simulation == null || ragdollBones.Count == 0)
-            return;
+        private readonly SimulationContext ctx;
+        internal SurfaceRuntime(SimulationContext ctx) { this.ctx = ctx; }
 
-        var identity = ReadCharacterSurfaceIdentity();
-        if (!identity.IsHumanoid)
-            return;
+        // Lightweight final-collision surface cache shared by traversal, grabbing, debug drawing,
+        // and the actual accepted per-bone collision shapes. It follows the
+        // already-existing rigid bodies, so updating it is allocation-free and never touches model file data.
+        internal CharacterSurfaceRuntime? Runtime;
 
-        // The runtime surface is a lightweight query copy of the collision proxy that was
-        // actually accepted. Do not re-apply the old JSON race profile here: doing so would make
-        // traversal/grab/debug disagree with physics even after the mesh measurement was valid.
-        var profile = new CharacterSurfaceProfile
+        /// <summary>Builds the surface from the bodies just made; <paramref name="activeDefByName"/> is the rig's
+        /// bone definitions by name.</summary>
+        internal void Build(bool genericSkeleton, Dictionary<string, RagdollBoneDef> activeDefByName)
         {
-            Id = "mesh-collision-runtime",
-            Name = "Mesh-Derived Collision Proxy",
-            Gender = byte.MaxValue,
-            MinHeightScale = 1f,
-            MaxHeightScale = 1f,
-            Margins = new CharacterSurfaceMargins
-            {
-                Physics = 1f,
-                Traversal = 1f,
-                Grab = 1f,
-                Ground = 1f,
-            },
-            DefaultScale = new CharacterSurfaceRoleScales
-            {
-                Width = 1f,
-                Depth = 1f,
-                Length = 1f,
-                EndOverlap = 0f,
-                TaperStart = 1f,
-                TaperMiddle = 1f,
-                TaperEnd = 1f,
-            },
-        };
+            Runtime = null;
+            if (genericSkeleton || ctx.Simulation == null || ctx.Bodies.Count == 0)
+                return;
 
-        var seeds = new CharacterSurfaceBoneSeed[ragdollBones.Count];
-        for (var i = 0; i < ragdollBones.Count; i++)
-        {
-            var rb = ragdollBones[i];
-            var radiusX = rb.ColliderShape == RagdollColliderShape.Box
-                ? rb.BoxHalfExtents.X
-                : rb.CapsuleRadius;
-            var radiusZ = rb.ColliderShape == RagdollColliderShape.Box
-                ? rb.BoxHalfExtents.Z
-                : rb.CapsuleRadius;
-            var halfLength = rb.ColliderShape == RagdollColliderShape.Box
-                ? rb.BoxHalfExtents.Y
-                : rb.CapsuleHalfLength;
-            var role = activeDefByName.TryGetValue(rb.Name, out var def)
-                ? def.AnatomicalRole.ToString()
-                : SkeletonBoneRole.Generic.ToString();
-            seeds[i] = new CharacterSurfaceBoneSeed(
-                rb.Name, role, halfLength, radiusX, radiusZ,
-                rb.ColliderShape == RagdollColliderShape.Box,
-                rb.MeshGeometry);
+            var identity = ReadCharacterSurfaceIdentity(ctx.Actors, ctx.TargetCharacterAddress);
+            if (!identity.IsHumanoid)
+                return;
+
+            // The runtime surface is a lightweight query copy of the collision proxy that was
+            // actually accepted. Do not re-apply the old JSON race profile here: doing so would make
+            // traversal/grab/debug disagree with physics even after the mesh measurement was valid.
+            var profile = new CharacterSurfaceProfile
+            {
+                Id = "mesh-collision-runtime",
+                Name = "Mesh-Derived Collision Proxy",
+                Gender = byte.MaxValue,
+                MinHeightScale = 1f,
+                MaxHeightScale = 1f,
+                Margins = new CharacterSurfaceMargins
+                {
+                    Physics = 1f,
+                    Traversal = 1f,
+                    Grab = 1f,
+                    Ground = 1f,
+                },
+                DefaultScale = new CharacterSurfaceRoleScales
+                {
+                    Width = 1f,
+                    Depth = 1f,
+                    Length = 1f,
+                    EndOverlap = 0f,
+                    TaperStart = 1f,
+                    TaperMiddle = 1f,
+                    TaperEnd = 1f,
+                },
+            };
+
+            var seeds = new CharacterSurfaceBoneSeed[ctx.Bodies.Count];
+            for (var i = 0; i < ctx.Bodies.Count; i++)
+            {
+                var rb = ctx.Bodies[i];
+                var radiusX = rb.ColliderShape == RagdollColliderShape.Box
+                    ? rb.BoxHalfExtents.X
+                    : rb.CapsuleRadius;
+                var radiusZ = rb.ColliderShape == RagdollColliderShape.Box
+                    ? rb.BoxHalfExtents.Z
+                    : rb.CapsuleRadius;
+                var halfLength = rb.ColliderShape == RagdollColliderShape.Box
+                    ? rb.BoxHalfExtents.Y
+                    : rb.CapsuleHalfLength;
+                var role = activeDefByName.TryGetValue(rb.Name, out var def)
+                    ? def.AnatomicalRole.ToString()
+                    : SkeletonBoneRole.Generic.ToString();
+                seeds[i] = new CharacterSurfaceBoneSeed(
+                    rb.Name, role, halfLength, radiusX, radiusZ,
+                    rb.ColliderShape == RagdollColliderShape.Box,
+                    rb.MeshGeometry);
+            }
+
+            Runtime = new CharacterSurfaceRuntime(profile, identity, seeds);
+            Update();
+            ctx.Log.Info($"Ragdoll: final collision-proxy surface cached for {ctx.Bodies.Count} bones.");
         }
 
-        characterSurfaceRuntime = new CharacterSurfaceRuntime(profile, identity, seeds);
-        UpdateCharacterSurfaceRuntime();
-        log.Info($"Ragdoll: final collision-proxy surface cached for {ragdollBones.Count} bones.");
-    }
-
-    private void UpdateCharacterSurfaceRuntime()
-    {
-        if (characterSurfaceRuntime == null || simulation == null)
-            return;
-
-        foreach (var rb in ragdollBones)
+        internal void Update()
         {
-            var body = simulation.Bodies.GetBodyReference(rb.BodyHandle);
-            characterSurfaceRuntime.UpdateBonePose(
-                rb.Name, body.Pose.Position, body.Pose.Orientation);
+            if (Runtime == null || ctx.Simulation == null)
+                return;
+
+            foreach (var rb in ctx.Bodies)
+            {
+                var body = ctx.Simulation.Bodies.GetBodyReference(rb.BodyHandle);
+                Runtime.UpdateBonePose(
+                    rb.Name, body.Pose.Position, body.Pose.Orientation);
+            }
         }
     }
 }

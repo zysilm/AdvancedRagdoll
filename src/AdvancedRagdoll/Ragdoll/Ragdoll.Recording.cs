@@ -449,7 +449,7 @@ public unsafe partial class Ragdoll
 
     /// <param name="skeleton">The target's skeleton as the surrounding code obtained it, or null. The model
     /// type is asked of the draw object only when the ragdoll code itself would ask at this point: once a
-    /// skeleton with models and a Havok skeleton was obtained (the condition in StartStructuralMeshFit).
+    /// skeleton with models and a Havok skeleton was obtained (the condition in StructuralFit.Start).
     /// Otherwise the record says -1.</param>
     private void RecIdentity(IHostSkeleton? skeleton)
     {
@@ -1874,12 +1874,12 @@ public unsafe partial class Ragdoll
     internal FrozenMeshGeometryCache? GetWeaponContactMesh(nint address)
     {
         var w = rec;
-        if (w == null) return GetWeaponContactMeshCore(address);
+        if (w == null) return meshVolumes.GetWeaponContactMesh(address);
         using (RecCall(w, nameof(GetWeaponContactMesh))) w.U64((ulong)address);
         recDepth++;
         try
         {
-            var cache = GetWeaponContactMeshCore(address);
+            var cache = meshVolumes.GetWeaponContactMesh(address);
             using (w.Begin(RecordType.ApiReturn)) { w.Str(nameof(GetWeaponContactMesh)); w.Bool(cache != null); }
             return cache;
         }
