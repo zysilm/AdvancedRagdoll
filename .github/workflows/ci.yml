@@ -80,3 +80,17 @@ jobs:
         with:
           dotnet-version: 10.0.x
       - run: dotnet run --project tests/WeaponDropGolden -c Release
+
+  # Golden output of the guided collapse and the knee power loss, compared byte for byte. Windows only, for the same
+  # reason as weapon-drop-golden.
+  collapse-golden:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet run --project tests/CollapseGolden -c Release
