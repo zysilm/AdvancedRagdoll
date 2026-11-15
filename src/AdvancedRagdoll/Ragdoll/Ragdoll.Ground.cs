@@ -24,7 +24,6 @@ public unsafe partial class Ragdoll
     private float groundY { get => ground.GroundY; set => ground.GroundY = value; }
     // Real terrain ground (before floor offset), used for visual correction
     private float realGroundY { get => ground.RealGroundY; set => ground.RealGroundY = value; }
-    private List<Vector2> terrainPatchCenters => ground.PatchCenters;
 
     private void AddTerrainPatch(float centerX, float centerZ, float defaultGroundY)
         => ground.AddTerrainPatch(centerX, centerZ, defaultGroundY, targetIsLocalPlayer, activeRagdollMeshVolumes);
@@ -259,5 +258,9 @@ public unsafe partial class Ragdoll
             if (ctx.Settings.RagdollVerboseLog)
                 ctx.Log.Info($"Ragdoll: added dynamic terrain patch at ({sample.X:F2}, {sample.Z:F2}); total={PatchCenters.Count}");
         }
+
+        // a6-12
+        /// <summary>Deactivation: the ground patches laid so far are forgotten.</summary>
+        internal void ClearPatchCenters() => PatchCenters.Clear();
     }
 }

@@ -570,5 +570,12 @@ public unsafe partial class Ragdoll
 
             return Quaternion.Normalize(Quaternion.Inverse(bestChild) * parentOrientation);
         }
+
+        // a6-12
+        /// <summary>The replay puts back whether earlier activations armed the pattern for the next death.</summary>
+        internal void RestoreCarried(bool pending) => pendingKneePowerLossPattern = pending;
+
+        /// <summary>Deactivation drops the pattern armed for the next death (after stopping a running one).</summary>
+        internal void Disarm() => pendingKneePowerLossPattern = false;
     }
 }

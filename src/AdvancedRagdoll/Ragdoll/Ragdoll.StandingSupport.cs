@@ -296,5 +296,15 @@ public unsafe partial class Ragdoll
                     SpringSettings = new SpringSettings(wristFreq, 1f),
                 }));
         }
+
+        // a6-12
+        /// <summary>Simulation teardown: the hold and the wrist constraints are forgotten (they go with the
+        /// simulation).</summary>
+        internal void Teardown()
+        {
+            standingActive = false;
+            standingConstraints.Clear();
+            wristConstraints.Clear();
+        }
     }
 }

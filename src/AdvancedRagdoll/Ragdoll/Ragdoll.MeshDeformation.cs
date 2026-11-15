@@ -6,12 +6,10 @@ namespace AdvancedRagdoll;
 
 public unsafe partial class Ragdoll
 {
-    private long lastMeshLodInstall { get => meshVolumes.lastMeshLodInstall; set => meshVolumes.lastMeshLodInstall = value; }
-
     private sealed partial class MeshVolumes
     {
         private long lastMeshBudgetReport;
-        internal long lastMeshLodInstall;
+        private long lastMeshLodInstall;
 
         // Frozen mesh mode never skins vertices or refits a native mesh during simulation.
         // Only newly completed cached LODs can replace a shape, once, outside worker steps.
@@ -67,5 +65,9 @@ public unsafe partial class Ragdoll
                         $"frozen cache; skin/refit=0, collision={collisionMs:F1}, solve={solveMs:F1}, other={Math.Max(0, milliseconds - collisionMs - solveMs):F1} ms, " +
                         $"main native pool={(ctx.BufferPool?.GetTotalAllocatedByteCount() ?? 0) / 1048576d:F1} MiB.");
         }
+
+        // a6-12
+        /// <summary>Simulation teardown: no collision LOD has been swapped in yet.</summary>
+        internal void ResetLodInstall() => lastMeshLodInstall = 0;
     }
 }

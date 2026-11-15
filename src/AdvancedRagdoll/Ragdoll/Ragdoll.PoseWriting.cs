@@ -449,5 +449,12 @@ public unsafe partial class Ragdoll
                 }
             }
         }
+
+        // a6-12
+        /// <summary>Deactivation: the rig's bone index set goes.</summary>
+        internal void ClearBoneIndices() => ragdollBoneIndices.Clear();
+
+        /// <summary>Deactivation: no head bone.</summary>
+        internal void ResetHeadBoneIndex() => kaoBodyBoneIndex = -1;
     }
 }

@@ -21,8 +21,6 @@ public unsafe partial class Ragdoll
     // (Ragdoll.Joints.cs).
     private readonly JointModel joints;
 
-    private Dictionary<string, (ConstraintHandle Handle, AngularMotor Original)> angularMotorByBone => joints.AngularMotorByBone;
-    private Dictionary<string, (ConstraintHandle Handle, SwingLimit Original)> swingLimitByBone => joints.SwingLimitByBone;
     private List<RecoilRelax> recoilRelaxers => joints.RecoilRelaxers;
 
     /// <summary>
@@ -217,8 +215,6 @@ public unsafe partial class Ragdoll
         private readonly Dictionary<string, (ConstraintHandle Handle, AngularMotor Original)> angularMotorByBone = new();
         private readonly Dictionary<string, (ConstraintHandle Handle, SwingLimit Original)> swingLimitByBone = new();
         private readonly List<RecoilRelax> recoilRelaxers = new();
-        internal Dictionary<string, (ConstraintHandle Handle, AngularMotor Original)> AngularMotorByBone => angularMotorByBone;
-        internal Dictionary<string, (ConstraintHandle Handle, SwingLimit Original)> SwingLimitByBone => swingLimitByBone;
         internal List<RecoilRelax> RecoilRelaxers => recoilRelaxers;
 
         private const float RecoilSwingAngle = 1.7f; // ~97° — wide arc during the recoil window
@@ -1055,5 +1051,14 @@ public unsafe partial class Ragdoll
         /// <summary>A joint's motor as built, for the release after a recoil or a landing.</summary>
         internal void RecordMotor(string bone, ConstraintHandle handle, AngularMotor motor)
             => angularMotorByBone[bone] = (handle, motor);
+
+        // a6-12
+        /// <summary>Simulation teardown: the motors and swing limits as built and the running releases.</summary>
+        internal void Teardown()
+        {
+            angularMotorByBone.Clear();
+            swingLimitByBone.Clear();
+            recoilRelaxers.Clear();
+        }
     }
 }

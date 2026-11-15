@@ -505,6 +505,25 @@ public unsafe partial class Ragdoll
             log.Info($"Ragdoll: active dismember physics removed {removedNames.Count}/{defs.Length} bodies.");
             return kept.ToArray();
         }
+
+        // a6-12
+        /// <summary>The replay puts back the severed-limb selection earlier activations left.</summary>
+        internal void RestoreCarried(bool useLocalSeveredBones, List<string> localSeveredBones)
+        {
+            useLocalDismemberBones = useLocalSeveredBones;
+            localDismemberBones.Clear();
+            localDismemberBones.AddRange(localSeveredBones);
+        }
+
+        /// <summary>Deactivation: the active rig's definitions go.</summary>
+        internal void ClearActiveDefs() => activeDefByName.Clear();
+
+        /// <summary>Deactivation: the severed-limb selection goes.</summary>
+        internal void ClearSeveredSelection()
+        {
+            useLocalDismemberBones = false;
+            localDismemberBones.Clear();
+        }
     }
 
     /// <summary>

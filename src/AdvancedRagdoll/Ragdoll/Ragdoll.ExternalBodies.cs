@@ -1086,5 +1086,24 @@ public unsafe partial class Ragdoll
                 MathF.Abs(x.Y) * half.X + MathF.Abs(y.Y) * half.Y + MathF.Abs(z.Y) * half.Z,
                 MathF.Abs(x.Z) * half.X + MathF.Abs(y.Z) * half.Y + MathF.Abs(z.Z) * half.Z);
         }
+
+        // a6-12
+        /// <summary>The replay puts back the generation stamp earlier activations left.</summary>
+        internal void RestoreCarried(int generation) => externalBodyGeneration = generation;
+
+        /// <summary>Simulation teardown, first step: handles stamped before now are dead.</summary>
+        internal void BumpGeneration() => externalBodyGeneration++;
+
+        /// <summary>Simulation teardown: the bodies and rigs and the four contact filter sets. The carried rigs are
+        /// not cleared here (as before).</summary>
+        internal void Teardown()
+        {
+            externalBodies.Clear();
+            externalRigs.Clear();
+            externalDynamicBodyHandles.Clear();
+            externalRigDynamicBodyHandles.Clear();
+            externalRigNoRagdollContactBodyHandles.Clear();
+            externalRigConnectedPairs.Clear();
+        }
     }
 }

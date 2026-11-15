@@ -117,19 +117,10 @@ public unsafe partial class Ragdoll
     private readonly CorpseTraversal corpseTraversal;
 
     private Dictionary<nint, NpcTraversalAnchor> npcTraversalAnchors => corpseTraversal.Anchors;
-    // Face traversal landmarks, sampled once while InitializePhysics owns a coherent render-frame skeleton
-    // snapshot, in head-local coordinates.
-    private List<FaceTraversalLandmark> faceTraversalLandmarks => corpseTraversal.FaceLandmarks;
-    private float traversalMassMultiplier
-    {
-        get => corpseTraversal.MassMultiplier;
-        set => corpseTraversal.MassMultiplier = value;
-    }
     // Finite-mass foot carriers for autonomous swarm traversal (the narrow phase's traversal dynamics).
     private HashSet<int> npcTraversalDynamicBodyHandles => corpseTraversal.DynamicBodyHandles;
     private object npcTraversalProxySync => corpseTraversal.ProxySync;
     private Dictionary<nint, NpcTraversalProxyRequest> npcTraversalProxyRequests => corpseTraversal.ProxyRequests;
-    private Dictionary<nint, NpcTraversalProxy> npcTraversalProxies => corpseTraversal.Proxies;
     private bool npcTraversalProxyActivityThisFrame
     {
         get => corpseTraversal.ProxyActivityThisFrame;
@@ -326,11 +317,9 @@ public unsafe partial class Ragdoll
 
         internal Dictionary<nint, NpcTraversalAnchor> Anchors => npcTraversalAnchors;
         internal List<FaceTraversalLandmark> FaceLandmarks => faceTraversalLandmarks;
-        internal float MassMultiplier { get => traversalMassMultiplier; set => traversalMassMultiplier = value; }
         internal HashSet<int> DynamicBodyHandles => npcTraversalDynamicBodyHandles;
         internal object ProxySync => npcTraversalProxySync;
         internal Dictionary<nint, NpcTraversalProxyRequest> ProxyRequests => npcTraversalProxyRequests;
-        internal Dictionary<nint, NpcTraversalProxy> Proxies => npcTraversalProxies;
         internal bool ProxyActivityThisFrame
         {
             get => npcTraversalProxyActivityThisFrame;
@@ -1719,5 +1708,45 @@ public unsafe partial class Ragdoll
                 }
             }
         }
+
+        // a6-12
+        /// <summary>The replay puts back the walking-support requests the Activate record lists (under the proxy
+        /// lock).</summary>
+        internal void RestoreCarried(List<ReplayTraversalRequest> requests)
+        {
+            lock (npcTraversalProxySync)
+            {
+                npcTraversalProxyRequests.Clear();
+                foreach (var r in requests)
+                    npcTraversalProxyRequests[r.Actor] = new NpcTraversalProxyRequest
+                    {
+                        Enabled = r.Enabled, InitialRoot = r.InitialRoot, TargetRoot = r.TargetRoot, FloorY = r.FloorY,
+                        VisualScale = r.VisualScale, MoveSpeed = r.MoveSpeed, MaxClimb = r.MaxClimb,
+                        StompResponse = r.StompResponse, ConcurrentStompers = r.ConcurrentStompers, Locomoting = r.Locomoting,
+                    };
+            }
+        }
+
+        /// <summary>Activation: the rig starts at its own mass.</summary>
+        internal void ResetForActivation() => traversalMassMultiplier = 1f;
+
+        /// <summary>Simulation teardown: the face landmarks.</summary>
+        internal void ClearFaceLandmarks() => faceTraversalLandmarks.Clear();
+
+        /// <summary>Simulation teardown: the finite-mass carriers, their requests (under the proxy lock) and this
+        /// frame's activity.</summary>
+        internal void ClearProxies()
+        {
+            npcTraversalDynamicBodyHandles.Clear();
+            lock (npcTraversalProxySync)
+            {
+                npcTraversalProxyRequests.Clear();
+                npcTraversalProxies.Clear();
+            }
+            npcTraversalProxyActivityThisFrame = false;
+        }
+
+        /// <summary>Simulation teardown: the retained support pairs.</summary>
+        internal void ClearAnchors() => npcTraversalAnchors.Clear();
     }
 }
