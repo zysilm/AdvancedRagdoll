@@ -236,3 +236,22 @@ no longer carries the settle window, the liveness check, the live-hair flag or t
 creates each joint's own constraints (ball sockets, hinges, swivel hinges, cones, twist limits, servos, motors) inline,
 in the same order, and calls the joint model for the anatomical additions at the same points; it records the motors
 and swing limits for the release through forwarding properties. Moving that loop belongs to the rig build stage.
+
+<!-- a6-9 -->
+| Component | File | Owns |
+| --- | --- | --- |
+| `Recorder` | `Ragdoll.Recording.cs` | the recording session of an activation (its file and writer, the nesting depth of recorded calls, the render frame, physics frame and fixed step counters, the structural fit outcome, the configuration watches, the skeleton topologies, last poses and mesh caches already written, the body-state buffers) and the controller's recording id |
+
+Since A6-9 the context holds the recorder (`SimulationContext.Recorder`): a component asks it whether the activation is
+recorded and writes its records through it (mesh caches, mesh LODs and uses, the hair mesh, the structural fit outcome),
+so `CoreCalls` no longer carries recording. The recorder writes the records that need only their arguments and the
+context: the header and configuration, the target's identity, skeleton poses and topologies, actor positions, decisions
+and events, trigger inputs, the step body states, bone definitions, structural fits, meshes and triangles, and the
+argument helpers of recorded calls; it also runs the checks at the start of a render frame (session stopped, limits).
+The records that read other subsystems' state stay in the ragdoll's own `Rec*` methods, which write them through the
+recorder's writer at the same moments as before: the Activate record and the carried body surfaces, the render frame,
+frame begin and end, the start and end of the rig build, and the selected NPCs (whether the host has a selector). Every
+`Rec*` method keeps its name on the ragdoll (most forward in one line), and so do the recorded API calls; the hair mesh
+record gets whether the hair is animated from the hair rig, which passes its own value. The debug capsules
+(`Ragdoll.Diagnostics.cs`) read the rig and the frame cost counters are process-wide, and the replay's carried-state
+restore (`Ragdoll.Replay.cs`) writes the fields of many components, so neither belongs to the recorder; they stay.

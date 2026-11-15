@@ -358,6 +358,8 @@ public unsafe partial class Ragdoll : IDisposable
         corpseTraversal = new CorpseTraversal(ctx);
         // a6-7
         joints = new JointModel(ctx);
+        // a6-9
+        ctx.Recorder = recorder = new Recorder(ctx);
         settingsSource.Refresh(settings);
         collapseProfileBook = collapseProfiles;
     }

@@ -266,6 +266,11 @@ public unsafe partial class Ragdoll
             scale = Vector3.One;
             return false;
         }
+
+        // a6-9
+        // The recording session (Ragdoll.Recording.cs): records go through it, and it says whether this activation is
+        // recorded. Set by the ragdoll's constructor, before anything can record.
+        internal Recorder Recorder = null!;
     }
 
     /// <summary>
@@ -278,12 +283,6 @@ public unsafe partial class Ragdoll
         private readonly Ragdoll owner;
         internal CoreCalls(Ragdoll owner) { this.owner = owner; }
 
-        /// <summary>True while a recording session writes this activation.</summary>
-        internal bool Recording => owner.rec != null;
-        internal void RecMeshCache(FrozenMeshGeometryCache? cache, string use) => owner.RecMeshCache(cache, use);
-        internal void RecMeshUse(string site, string bone, BodyMeshGeometry geometry) => owner.RecMeshUse(site, bone, geometry);
-        internal void RecHairMesh(Hair.HairMeshBinding? binding) => owner.RecHairMesh(binding);
-
         internal FrozenMeshGeometryCache? GetWeaponContactMesh(nint address) => owner.GetWeaponContactMesh(address);
         internal FrozenMeshGeometryCache? CachedSurfaceFor(nint address) => owner.CachedSurfaceFor(address);
 
@@ -292,9 +291,6 @@ public unsafe partial class Ragdoll
             owner.hasPrevPhysicsState ? System.Math.Clamp(owner.physicsAccumulator / FixedTimestep, 0, 1) : 1;
 
         // a6-2
-        internal void RecMeshLod(string site, string bone, MeshCollisionLodResult lod) => owner.RecMeshLod(site, bone, lod);
-        /// <summary>The recorded outcome of the structural fit (1 none, 2 not ready, 3 fitted, 4 failed).</summary>
-        internal void RecFitOutcome(int outcome) => owner.recFitOutcome = outcome;
         internal FrozenMeshGeometryCache? CaptureFrozenMeshCache(nint address) => owner.CaptureFrozenMeshCache(address);
     }
 }

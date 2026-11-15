@@ -14,114 +14,144 @@ using AdvancedRagdoll.Hair;
 using AdvancedRagdoll.MeshVolume;
 using AdvancedRagdoll.Hosting;
 using AdvancedRagdoll.Recording;
+using BepuSimulation = BepuPhysics.Simulation;
 
 namespace AdvancedRagdoll;
 
 // Read-only recorder for one ragdoll activation (docs/ARCHITECTURE.md §6).
 //
-// Everything here only observes. `rec` is null unless a recording session was on when the ragdoll
+// Everything here only observes. The recorder's writer is null unless a recording session was on when the ragdoll
 // was activated, so each call site in the controller costs one null check. The helpers below read
 // the same game memory the surrounding code reads at that moment, never throw into the caller, and
 // write records in the order things happen. The format is described in
 // Recording/RagdollRecordingFormat.cs.
+//
+// The recording session and the records that only need what is handed in (or the context) belong to the Recorder
+// component, reachable from the context (SimulationContext.Recorder). The records that read the state of other
+// subsystems (the Activate record, the frame and rig records) and the recorded API calls stay in the ragdoll's own
+// methods below, which write them through the recorder's writer.
 public unsafe partial class Ragdoll
 {
-    private static int recNextControllerId;
-    private static readonly ConcurrentDictionary<Type, FieldInfo[]> RecFieldCache = new();
+    // a6-9: the recording session (Recorder, below).
+    private readonly Recorder recorder;
+    // The recording session's state, under its old names, for the code that is not split yet (and the recording
+    // decorators made in the constructor).
+    private RagdollRecordingWriter? rec => recorder.Writer;
+    private int recDepth { get => recorder.Depth; set => recorder.Depth = value; }
+    private Dictionary<object, int> recMeshCaches => recorder.MeshCaches;
 
-    private readonly int recControllerId = System.Threading.Interlocked.Increment(ref recNextControllerId);
-    private RagdollRecordingWriter? rec;
-    private RagdollRecordingSession.RecordingFile? recFile;
-    // 0 = a call from the rest of the plugin; more = made while a frame or another recorded call runs.
-    private int recDepth;
-    private int recRenderFrame;
-    private int recPhysicsFrame;
-    private int recTick;
-    private int recFitOutcome;
-    private bool recFaultLogged;
-    // One watch per entry of RecConfigNames. The bound getters are shared by every controller (built with
-    // the first recording); each recorded activation gets its own copies, which remember what it last saw.
-    private static RagdollRecordingWatch?[]? recConfigWatchPrototypes;
-    private RagdollRecordingWatch?[] recConfigWatches = Array.Empty<RagdollRecordingWatch?>();
-    // Created with the first recording, so a controller that is never recorded carries nothing.
-    private Dictionary<(ulong Actor, int Partial), (nint Skeleton, int Bones)> recTopologies = null!;
-    private Dictionary<(ulong Actor, int Purpose, int Partial), byte[]> recLastPose = null!;
-    private Dictionary<object, int> recMeshCaches = null!;
-    private int[] recHandles = Array.Empty<int>();
-    private byte[] recFlags = Array.Empty<byte>();
-    private float[] recStates = Array.Empty<float>();
-
-    /// <summary>Every configuration property the ragdoll code reads (Ragdoll*.cs), by name.</summary>
-    private static readonly string[] RecConfigNames =
+    /// <summary>
+    /// The recording session of this ragdoll: the file and writer of the activation being recorded (null when none),
+    /// the nesting depth of recorded calls, the frame and step counters, the structural fit outcome, the configuration
+    /// watches, and what was already written (skeleton topologies, the last poses, mesh caches). It writes the
+    /// records that need only what is handed in and the context; it never reads another component's state.
+    /// </summary>
+    private sealed class Recorder
     {
-        nameof(HostSettings.DismemberPocBones),
-        nameof(HostSettings.EnableCombatCompanions),
-        nameof(HostSettings.EnableNpcDeathRagdoll),
-        nameof(HostSettings.ExtendTerrainDetection),
-        nameof(HostSettings.GuidedCollapse),
-        nameof(HostSettings.KoStripPhysicsDropClothing),
-        nameof(HostSettings.NpcCollisionActive),
-        nameof(HostSettings.NpcRagdollFineDetail),
-        nameof(HostSettings.PartyCompanionDeathRagdoll),
-        nameof(HostSettings.RagdollActivationDelay),
-        nameof(HostSettings.RagdollAnatomicalRom),
-        nameof(HostSettings.RagdollExactGroundCollision),
-        nameof(HostSettings.RagdollHairBodyMesh),
-        nameof(HostSettings.RagdollHairPhysics),
-        nameof(HostSettings.RagdollMeshCacheRevision),
-        nameof(HostSettings.RagdollMeshCollisionLod),
-        nameof(HostSettings.RagdollMeshContactQuality),
-        nameof(HostSettings.RagdollMeshLodToleranceMm),
-        nameof(HostSettings.RagdollMeshVolumes),
-        nameof(HostSettings.RagdollNpcCollisionAutoSize),
-        nameof(HostSettings.RagdollNpcCollisionMode),
-        nameof(HostSettings.RagdollNpcCollisionScale),
-        nameof(HostSettings.RagdollSoftTissueBonePrefixes),
-        nameof(HostSettings.RagdollSoftTissueCollision),
-        nameof(HostSettings.RagdollSoftTissueModBones),
-        nameof(HostSettings.RagdollSoftTissueScope),
-        nameof(HostSettings.RagdollSquashIntensity),
-        nameof(HostSettings.RagdollSquashStretch),
-        nameof(HostSettings.RagdollTriggerMode),
-        nameof(HostSettings.RagdollVerboseLog),
-        nameof(HostSettings.RagdollWaterBuoyancy),
-        nameof(HostSettings.RagdollWaterLiquid),
-        nameof(HostSettings.WeaponBodyMeshContacts),
-        nameof(HostSettings.WeaponDropMeshCollision),
-    };
+        private static int nextControllerId;
+        private static readonly ConcurrentDictionary<Type, FieldInfo[]> FieldCache = new();
 
-    private static readonly PropertyInfo?[] RecConfigProperties = Array.ConvertAll(RecConfigNames,
-        name => typeof(HostSettings).GetProperty(name, BindingFlags.Public | BindingFlags.Instance));
+        private readonly SimulationContext ctx;
+        internal Recorder(SimulationContext ctx) { this.ctx = ctx; }
 
-    // ------------------------------------------------------------------ lifetime
+        internal readonly int ControllerId = System.Threading.Interlocked.Increment(ref nextControllerId);
+        /// <summary>The writer of the activation being recorded; null when nothing is recorded.</summary>
+        internal RagdollRecordingWriter? Writer;
+        internal RagdollRecordingSession.RecordingFile? File;
+        // 0 = a call from the rest of the plugin; more = made while a frame or another recorded call runs.
+        internal int Depth;
+        private int renderFrame;
+        internal int PhysicsFrame;
+        internal int Tick;
+        /// <summary>The recorded outcome of the structural fit (1 none, 2 not ready, 3 fitted, 4 failed).</summary>
+        internal int FitOutcome;
+        private bool faultLogged;
+        // One watch per entry of ConfigNames. The bound getters are shared by every controller (built with
+        // the first recording); each recorded activation gets its own copies, which remember what it last saw.
+        private static RagdollRecordingWatch?[]? configWatchPrototypes;
+        private RagdollRecordingWatch?[] configWatches = Array.Empty<RagdollRecordingWatch?>();
+        // Created with the first recording, so a controller that is never recorded carries nothing.
+        private Dictionary<(ulong Actor, int Partial), (nint Skeleton, int Bones)> topologies = null!;
+        private Dictionary<(ulong Actor, int Purpose, int Partial), byte[]> lastPose = null!;
+        internal Dictionary<object, int> MeshCaches = null!;
+        private int[] handles = Array.Empty<int>();
+        private byte[] flags = Array.Empty<byte>();
+        private float[] states = Array.Empty<float>();
 
-    /// <summary>Called from Activate once the target is known. Opens this activation's file when a session is on.</summary>
-    private void RecBeginActivation(float delay, RagdollTriggerMode mode, float stagger)
-    {
-        if (!RagdollRecordingSession.Enabled) return;
-        try
+        /// <summary>True while a recording session writes this activation.</summary>
+        internal bool IsRecording => Writer != null;
+
+        /// <summary>Every configuration property the ragdoll code reads (Ragdoll*.cs), by name.</summary>
+        private static readonly string[] ConfigNames =
         {
-            var file = RagdollRecordingSession.TryOpen(targetIsLocalPlayer, targetEntityId);
-            if (file == null) return;
+            nameof(HostSettings.DismemberPocBones),
+            nameof(HostSettings.EnableCombatCompanions),
+            nameof(HostSettings.EnableNpcDeathRagdoll),
+            nameof(HostSettings.ExtendTerrainDetection),
+            nameof(HostSettings.GuidedCollapse),
+            nameof(HostSettings.KoStripPhysicsDropClothing),
+            nameof(HostSettings.NpcCollisionActive),
+            nameof(HostSettings.NpcRagdollFineDetail),
+            nameof(HostSettings.PartyCompanionDeathRagdoll),
+            nameof(HostSettings.RagdollActivationDelay),
+            nameof(HostSettings.RagdollAnatomicalRom),
+            nameof(HostSettings.RagdollExactGroundCollision),
+            nameof(HostSettings.RagdollHairBodyMesh),
+            nameof(HostSettings.RagdollHairPhysics),
+            nameof(HostSettings.RagdollMeshCacheRevision),
+            nameof(HostSettings.RagdollMeshCollisionLod),
+            nameof(HostSettings.RagdollMeshContactQuality),
+            nameof(HostSettings.RagdollMeshLodToleranceMm),
+            nameof(HostSettings.RagdollMeshVolumes),
+            nameof(HostSettings.RagdollNpcCollisionAutoSize),
+            nameof(HostSettings.RagdollNpcCollisionMode),
+            nameof(HostSettings.RagdollNpcCollisionScale),
+            nameof(HostSettings.RagdollSoftTissueBonePrefixes),
+            nameof(HostSettings.RagdollSoftTissueCollision),
+            nameof(HostSettings.RagdollSoftTissueModBones),
+            nameof(HostSettings.RagdollSoftTissueScope),
+            nameof(HostSettings.RagdollSquashIntensity),
+            nameof(HostSettings.RagdollSquashStretch),
+            nameof(HostSettings.RagdollTriggerMode),
+            nameof(HostSettings.RagdollVerboseLog),
+            nameof(HostSettings.RagdollWaterBuoyancy),
+            nameof(HostSettings.RagdollWaterLiquid),
+            nameof(HostSettings.WeaponBodyMeshContacts),
+            nameof(HostSettings.WeaponDropMeshCollision),
+        };
 
-            recRenderFrame = recPhysicsFrame = recTick = 0;
-            recFitOutcome = 0;
-            recFaultLogged = false;
-            recDepth = 0;
-            recTopologies = new();
-            recLastPose = new();
-            recMeshCaches = new(ReferenceEqualityComparer.Instance);
+        private static readonly PropertyInfo?[] ConfigProperties = Array.ConvertAll(ConfigNames,
+            name => typeof(HostSettings).GetProperty(name, BindingFlags.Public | BindingFlags.Instance));
+
+        // ------------------------------------------------------------------ lifetime
+
+        /// <summary>Takes over an opened file for a new activation: resets the session's counters and tables.</summary>
+        internal RagdollRecordingWriter Open(RagdollRecordingSession.RecordingFile file)
+        {
+            renderFrame = PhysicsFrame = Tick = 0;
+            FitOutcome = 0;
+            faultLogged = false;
+            Depth = 0;
+            topologies = new();
+            lastPose = new();
+            MeshCaches = new(ReferenceEqualityComparer.Instance);
 
             // From here on the file is this controller's: a failure below still closes it at deactivation.
             var w = file.Writer;
-            recFile = file;
-            rec = w;
+            File = file;
+            Writer = w;
+            return w;
+        }
+
+        internal void WriteHeader(RagdollRecordingWriter w, RagdollRecordingSession.RecordingFile file,
+            RagdollBuildInfo build, bool targetIsLocalPlayer)
+        {
             using (w.Begin(RecordType.Header))
             {
                 w.I32(RagdollRecordingFormat.Version);
-                w.Str(host.Build.HostVersion ?? "?");
-                w.Bool(host.Build.RestoresFollowPosition);
-                w.Bool(host.Build.PublicBuild);
+                w.Str(build.HostVersion ?? "?");
+                w.Bool(build.RestoresFollowPosition);
+                w.Bool(build.PublicBuild);
                 w.Str(RagdollRecordingBepu.BepuVersion());
                 w.Str(RuntimeInformation.FrameworkDescription);
                 w.Str(RuntimeInformation.OSDescription);
@@ -139,15 +169,808 @@ public unsafe partial class Ragdoll
                 w.I64(System.Diagnostics.Stopwatch.Frequency);
                 w.Str(RagdollRecordingSession.SessionId);
                 w.I32(file.Index);
-                w.I32(recControllerId);
-                w.Bool(RunAnimatedHair);
-                w.U64((ulong)targetCharacterAddress);
-                w.U32(targetEntityId);
-                w.I32(actors.GetObjectIndex(targetCharacterAddress));
+                w.I32(ControllerId);
+                w.Bool(ctx.RunAnimatedHair);
+                w.U64((ulong)ctx.TargetCharacterAddress);
+                w.U32(ctx.TargetEntityId);
+                w.I32(ctx.Actors.GetObjectIndex(ctx.TargetCharacterAddress));
                 w.Bool(targetIsLocalPlayer);
             }
+        }
 
-            RecConfigSnapshot(w);
+        /// <summary>Closes this activation's file, if any.</summary>
+        internal void EndActivation(string reason)
+        {
+            var file = File;
+            Writer = null;
+            File = null;
+            if (file == null) return;
+            try
+            {
+                RagdollRecordingSession.Close(file, reason);
+            }
+            catch (Exception ex)
+            {
+                ctx.Log.Warning(ex, "RagdollRec: closing the recording failed.");
+            }
+        }
+
+        internal void Fault(Exception ex)
+        {
+            if (!faultLogged)
+            {
+                faultLogged = true;
+                ctx.Log.Warning(ex, "RagdollRec: a recorder helper failed; the recording continues without that record.");
+            }
+            try
+            {
+                var w = Writer;
+                if (w == null) return;
+                using (w.Begin(RecordType.Note))
+                    w.Str("recorder fault: " + ex.GetType().Name + ": " + ex.Message);
+            }
+            catch
+            {
+                // Nothing more to do; never let the recorder disturb the frame.
+            }
+        }
+
+        /// <summary>
+        /// Exception filter of the recorder's own catch blocks. A filter runs before the using-scopes
+        /// between the throw and the catch are disposed, so the record that was being built at that moment
+        /// (if any) can still be marked: its scope then writes a note in its place instead of a record
+        /// that stops half-way. Always lets the catch block run.
+        /// </summary>
+        internal bool AbortPartial()
+        {
+            try { Writer?.AbortRecord(); }
+            catch { /* never let the recorder disturb the frame */ }
+            return true;
+        }
+
+        internal void Leave()
+        {
+            if (Depth > 0) Depth--;
+        }
+
+        // ------------------------------------------------------------------ configuration
+
+        private object? ConfigValue(int index)
+        {
+            var property = ConfigProperties[index];
+            if (property == null) return "<missing property>";
+            try
+            {
+                var value = property.GetValue(ctx.Settings);
+                return value switch
+                {
+                    null => null,
+                    bool or int or uint or long or float or double or string => value,
+                    Enum e => Convert.ToInt32(e),
+                    System.Collections.IEnumerable list when value is not string => Join(list),
+                    _ => System.Text.Json.JsonSerializer.Serialize(value, value.GetType()),
+                };
+            }
+            catch (Exception ex)
+            {
+                return "<unreadable: " + ex.GetType().Name + ">";
+            }
+        }
+
+        private static string Join(System.Collections.IEnumerable list)
+        {
+            var text = new System.Text.StringBuilder("[");
+            var first = true;
+            foreach (var item in list)
+            {
+                if (!first) text.Append(',');
+                first = false;
+                text.Append(System.Text.Json.JsonSerializer.Serialize(item?.ToString()));
+            }
+            return text.Append(']').ToString();
+        }
+
+        internal void ConfigSnapshot(RagdollRecordingWriter w)
+        {
+            var prototypes = configWatchPrototypes ??= Array.ConvertAll(ConfigProperties,
+                property => property == null ? null : RagdollRecordingWatch.For(property));
+            var values = new object?[ConfigNames.Length];
+            configWatches = new RagdollRecordingWatch?[ConfigNames.Length];
+            for (var i = 0; i < ConfigNames.Length; i++)
+            {
+                values[i] = ConfigValue(i);
+                // The first look only remembers the value the snapshot holds.
+                var watch = configWatches[i] = prototypes[i]?.Clone();
+                try { watch?.Changed(ctx.Settings); }
+                catch { configWatches[i] = null; /* unreadable: the snapshot says so; nothing to watch */ }
+            }
+            using (w.Begin(RecordType.ConfigSnapshot))
+            {
+                w.List(ConfigNames.Length * 2);
+                for (var i = 0; i < ConfigNames.Length; i++)
+                {
+                    w.Str(ConfigNames[i]);
+                    Any(w, values[i]);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Once per render frame. While nothing changed this allocates nothing: each watch reads its
+        /// property through a bound getter and compares it in its own type (see RagdollRecordingWatch).
+        /// The value is read the slow way, and written, only for a property that did change.
+        /// </summary>
+        internal void ConfigChanges(RagdollRecordingWriter w)
+        {
+            var watches = configWatches;
+            for (var i = 0; i < watches.Length; i++)
+            {
+                var watch = watches[i];
+                if (watch == null) continue;
+                bool changed;
+                try { changed = watch.Changed(ctx.Settings); }
+                catch { changed = false; }
+                if (!changed) continue;
+                var now = ConfigValue(i);
+                using (w.Begin(RecordType.ConfigChange))
+                {
+                    w.Str(ConfigNames[i]);
+                    Any(w, now);
+                }
+            }
+        }
+
+        // ------------------------------------------------------------------ generic values
+
+        internal static void Any(RagdollRecordingWriter w, object? value)
+        {
+            switch (value)
+            {
+                case null: w.Null(); break;
+                case bool v: w.Bool(v); break;
+                case int v: w.I32(v); break;
+                case uint v: w.U32(v); break;
+                case short v: w.I32(v); break;
+                case byte v: w.I32(v); break;
+                case long v: w.I64(v); break;
+                case ulong v: w.U64(v); break;
+                case nint v: w.U64((ulong)v); break;
+                case float v: w.F32(v); break;
+                case double v: w.F64(v); break;
+                case string v: w.Str(v); break;
+                case Vector2 v: w.V2(v); break;
+                case Vector3 v: w.V3(v); break;
+                case Quaternion v: w.Quat(v); break;
+                case Enum v: w.I32(Convert.ToInt32(v)); break;
+                case float[] v: w.Floats(v); break;
+                case int[] v: w.Ints(v); break;
+                case Vector3[] v: w.V3s(v); break;
+                case Quaternion[] v: w.Quats(v); break;
+                case BodyHandle v: w.I32(v.Value); break;
+                case TypedIndex v: w.U32(v.Packed); break;
+                // A reference to something recorded elsewhere (a mesh, a LOD): only its presence.
+                default: w.Str("<" + value.GetType().Name + ">"); break;
+            }
+        }
+
+        /// <summary>Writes every public field of a struct or class as one list of (name, value) pairs.</summary>
+        internal static void Fields(RagdollRecordingWriter w, object boxed)
+        {
+            var fields = FieldCache.GetOrAdd(boxed.GetType(),
+                static type => type.GetFields(BindingFlags.Public | BindingFlags.Instance));
+            w.List(fields.Length * 2);
+            foreach (var field in fields)
+            {
+                w.Str(field.Name);
+                Any(w, field.GetValue(boxed));
+            }
+        }
+
+        // ------------------------------------------------------------------ skeletons and actors
+
+        /// <param name="skeleton">The target's skeleton as the surrounding code obtained it, or null. The model
+        /// type is asked of the draw object only when the ragdoll code itself would ask at this point: once a
+        /// skeleton with models and a Havok skeleton was obtained (the condition in StructuralFit.Start).
+        /// Otherwise the record says -1.</param>
+        internal void Identity(IHostSkeleton? skeleton)
+        {
+            var w = Writer;
+            if (w == null || ctx.TargetCharacterAddress == nint.Zero) return;
+            try
+            {
+                Span<byte> customize = stackalloc byte[0x1A];
+                ctx.Actors.ReadAppearance(ctx.TargetCharacterAddress, customize, out var modelCharaId);
+                ctx.Actors.ReadModelType(ctx.TargetCharacterAddress, skeleton, out var modelType, out var raceSex);
+                using (w.Begin(RecordType.Identity))
+                {
+                    w.U64((ulong)ctx.TargetCharacterAddress);
+                    w.Bytes(customize);
+                    w.I32(modelCharaId);
+                    w.I32(modelType);
+                    w.I32(raceSex);
+                    w.F32(ctx.Actors.GetFacing(ctx.TargetCharacterAddress, ActorSite.Facing));
+                    w.V3(ctx.Actors.GetPosition(ctx.TargetCharacterAddress, ActorSite.Identity));
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        private void Topology(RagdollRecordingWriter w, ulong actor, IHostSkeleton skeleton, int partial)
+        {
+            if (!skeleton.PartAvailable(partial)) return;
+            var havok = skeleton.PartIdentity(partial);
+            var bones = skeleton.PartModelPoseLength(partial);
+            if (topologies.TryGetValue((actor, partial), out var seen) && seen == (havok, bones)) return;
+            topologies[(actor, partial)] = (havok, bones);
+
+            var nameCount = skeleton.PartBoneNameCount(partial);
+            var parentCount = skeleton.PartParentCount(partial);
+            var parents = new int[parentCount];
+            for (var i = 0; i < parentCount; i++) parents[i] = skeleton.PartParent(partial, i);
+            using (w.Begin(RecordType.SkeletonTopology))
+            {
+                w.U64(actor);
+                w.I32(partial);
+                w.I32(bones);
+                w.I32(parentCount);
+                w.I32(skeleton.PartConnectedBone(partial));
+                w.I32(skeleton.PartConnectedParentBone(partial));
+                w.List(nameCount);
+                for (var i = 0; i < nameCount; i++) w.Str(skeleton.PartBoneName(partial, i));
+                w.Ints(parents);
+                w.Bytes(MemoryMarshal.AsBytes(skeleton.PartReferencePose(partial)));
+            }
+        }
+
+        /// <summary>
+        /// Captures a skeleton as the surrounding code is about to read it (or, for PoseOut, has just
+        /// written it): the root transform, the scale sources and the model pose of the body skeleton
+        /// (and of every attached partial skeleton when asked).
+        /// </summary>
+        internal void Skeleton(RecordType type, PosePurpose purpose, nint address, IHostSkeleton? access, bool allPartials)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                var actor = (ulong)address;
+                if (access == null || !access.HasRoot)
+                {
+                    using (w.Begin(type))
+                    {
+                        w.U64(actor);
+                        w.I32((int)purpose);
+                        w.Bool(false);
+                    }
+                    return;
+                }
+
+                var skel = access;
+                var partials = allPartials
+                    ? Math.Clamp(skel.PartCount, 1, 64)
+                    : 1;
+                for (var p = 0; p < partials; p++)
+                    Topology(w, actor, skel, p);
+
+                var drawScaleValid = ctx.TryGetVisualScale(address, out var drawScale);
+                var root = skel.Root;
+                using (w.Begin(type))
+                {
+                    w.U64(actor);
+                    w.I32((int)purpose);
+                    w.Bool(true);
+                    w.V3(root.Position);
+                    w.Quat(root.Rotation);
+                    w.V3(root.Scale);
+                    w.Bool(drawScaleValid);
+                    w.V3(drawScale);
+                    w.I32(partials);
+                    for (var p = 0; p < partials; p++)
+                    {
+                        w.I32(p);
+                        if (!skel.PartHasPose(p))
+                        {
+                            w.I32(2);
+                            continue;
+                        }
+                        var notInSync = skel.PartInSync(p) ? 0 : 4;
+                        var bytes = MemoryMarshal.AsBytes((ReadOnlySpan<BoneQs>)skel.PartModelPose(p));
+                        var key = (actor, (int)purpose, p);
+                        if (lastPose.TryGetValue(key, out var last) && bytes.SequenceEqual(last))
+                        {
+                            w.I32(1 | notInSync);
+                            continue;
+                        }
+                        if (last == null || last.Length != bytes.Length)
+                            lastPose[key] = last = new byte[bytes.Length];
+                        bytes.CopyTo(last);
+                        w.I32(notInSync);
+                        w.Bytes(bytes);
+                    }
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        internal void ActorPosition(ActorSite site, nint address, Vector3 position)
+        {
+            var w = Writer;
+            if (w == null) return;
+            using (w.Begin(RecordType.ActorPosition))
+            {
+                w.I32((int)site);
+                w.U64((ulong)address);
+                w.V3(position);
+            }
+        }
+
+        internal void ActorTransform(ActorSite site, nint address, Vector3 position, Quaternion rotation, bool scaleValid, Vector3 scale)
+        {
+            var w = Writer;
+            if (w == null) return;
+            using (w.Begin(RecordType.ActorTransform))
+            {
+                w.I32((int)site);
+                w.U64((ulong)address);
+                w.V3(position);
+                w.Quat(rotation);
+                w.Bool(scaleValid);
+                w.V3(scale);
+            }
+        }
+
+        internal void ActorList(string site, IReadOnlyList<nint> actors)
+        {
+            var w = Writer;
+            if (w == null) return;
+            using (w.Begin(RecordType.ActorList))
+            {
+                w.Str(site);
+                w.List(actors.Count);
+                for (var i = 0; i < actors.Count; i++) w.U64((ulong)actors[i]);
+            }
+        }
+
+        internal void WeaponSample(Vector3 position, Quaternion rotation)
+        {
+            var w = Writer;
+            if (w == null) return;
+            using (w.Begin(RecordType.WeaponSample))
+            {
+                w.Bool(true);
+                w.V3(position);
+                w.Quat(rotation);
+            }
+        }
+
+        internal void BoneWorldPosition(string site, nint address, string bone, Vector3? position)
+        {
+            var w = Writer;
+            if (w == null) return;
+            using (w.Begin(RecordType.BoneWorldPosition))
+            {
+                w.Str(site);
+                w.U64((ulong)address);
+                w.Str(bone);
+                w.Bool(position.HasValue);
+                w.V3(position ?? Vector3.Zero);
+            }
+        }
+
+        // World queries, random draws and clock stamps are recorded by the decorators in
+        // Hosting/RecordingDecorators.cs.
+
+        // ------------------------------------------------------------------ decisions
+
+        internal bool Decision(string site, bool value)
+        {
+            var w = Writer;
+            if (w == null) return value;
+            using (w.Begin(RecordType.Decision))
+            {
+                w.Str(site);
+                w.Bool(value);
+            }
+            return value;
+        }
+
+        internal void Event(string name, float value)
+        {
+            var w = Writer;
+            if (w == null) return;
+            using (w.Begin(RecordType.Event))
+            {
+                w.Str(name);
+                w.F32(value);
+            }
+        }
+
+        // ------------------------------------------------------------------ frames
+
+        /// <summary>
+        /// The checks at the start of a render frame: closes the file when the session stopped, the disk failed or a
+        /// limit was reached. Returns the writer to write this frame's records with, or null.
+        /// </summary>
+        internal RagdollRecordingWriter? BeginRenderFrame()
+        {
+            var w = Writer;
+            var file = File;
+            if (w == null || file == null) return null;
+            if (!w.IsOpen)
+            {
+                // The session was stopped (or the disk failed): drop the reference so the call sites go quiet.
+                EndActivation(w.Failed ? "write failed" : "session stopped");
+                return null;
+            }
+            // The byte limits are enforced by the writer for every record (it refuses the record that would
+            // cross one, and everything after it). Here the refusal is noticed and the file is closed.
+            if (RagdollRecordingSession.SessionBytesExhausted)
+            {
+                RagdollRecordingSession.CloseAllAtSessionLimit();
+                EndActivation(RagdollRecordingSession.SessionBytesReason);
+                return null;
+            }
+            if (file.Seconds > RagdollRecordingSession.SecondsLimit || w.FileLimitReached)
+            {
+                EndActivation(w.FileLimitReached
+                    ? $"size limit of {RagdollRecordingSession.MaxBytesPerFile / (1024 * 1024)} MiB reached"
+                    : $"time limit of {RagdollRecordingSession.MaxSecondsPerFile:F0} s reached");
+                return null;
+            }
+            return w;
+        }
+
+        /// <summary>Counts a render frame (in the file too) and returns its number.</summary>
+        internal int NextRenderFrame(RagdollRecordingSession.RecordingFile file) => file.RenderFrames = ++renderFrame;
+
+        internal void PreFrame()
+        {
+            if (Writer == null) return;
+            try
+            {
+                Skeleton(RecordType.SkeletonPose, PosePurpose.PreFrame, ctx.TargetCharacterAddress,
+                    ctx.Skeletons.TryGetSkeleton(ctx.TargetCharacterAddress, PosePurpose.PreFrame), false);
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        internal void TriggerInputs(RagdollAnimationSample? animation, float? middleHeight, float? motion)
+        {
+            var w = Writer;
+            if (w == null) return;
+            using (w.Begin(RecordType.TriggerInputs))
+            {
+                w.Bool(animation.HasValue);
+                w.U64((ulong)(animation?.Id ?? 0));
+                w.F32(animation?.Time ?? 0f);
+                w.F32(animation?.Duration ?? 0f);
+                w.Bool(middleHeight.HasValue);
+                w.F32(middleHeight ?? 0f);
+                w.Bool(motion.HasValue);
+                w.F32(motion ?? 0f);
+            }
+        }
+
+        /// <summary>After each fixed step (and everything the controller does around it): every body's state.</summary>
+        internal void Step(int substep, bool steppedExternally)
+        {
+            var w = Writer;
+            var file = File;
+            if (w == null || file == null || ctx.Simulation == null) return;
+            try
+            {
+                file.FixedSteps = ++Tick;
+                BodyStates(w, ctx.Simulation, Tick, substep, steppedExternally);
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        /// <summary>Every body's state, as of this physics frame.</summary>
+        internal void BodyStates(RagdollRecordingWriter w, BepuSimulation simulation, int tick, int substep,
+            bool steppedExternally)
+            => RagdollRecordingBepu.WriteBodyStates(w, simulation, tick, PhysicsFrame, substep, steppedExternally,
+                ref handles, ref flags, ref states);
+
+        // ------------------------------------------------------------------ InitializePhysics
+
+        internal void BoneDefs(RagdollBoneDef[] defs, Dictionary<string, int> nameToIndex, bool generic)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                using (w.Begin(RecordType.BoneDefs))
+                {
+                    w.Bool(generic);
+                    w.I32(defs.Length);
+                    foreach (var def in defs)
+                    {
+                        Fields(w, def);
+                        w.I32(nameToIndex.TryGetValue(def.Name, out var index) ? index : -1);
+                    }
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        internal void StructuralFits(Dictionary<string, StructuralMeshFitter.Fit> fits)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                using (w.Begin(RecordType.StructuralFits))
+                {
+                    w.I32(FitOutcome);
+                    w.I32(fits.Count);
+                    foreach (var entry in fits)
+                    {
+                        w.Str(entry.Key);
+                        Fields(w, entry.Value);
+                    }
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        /// <summary>The cached bone-local surface of a character, the first time this recording sees that cache.</summary>
+        internal void MeshCache(FrozenMeshGeometryCache? cache, string use)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                using (w.Begin(RecordType.MeshCache))
+                {
+                    w.Str(use);
+                    RecordingMeshSource.WriteCache(w, cache, MeshCaches, true);
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        internal void MeshLod(string site, string bone, MeshCollisionLodResult lod)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                using (w.Begin(RecordType.MeshLod))
+                {
+                    w.Str(site);
+                    w.Str(bone);
+                    w.V3s(lod.Geometry.Vertices);
+                    w.Ints(lod.Geometry.Indices);
+                    w.Ints(lod.SourceVertexIndices);
+                    w.I32(lod.SourceFaceCount);
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        internal void MeshUse(string site, string bone, BodyMeshGeometry geometry)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                using (w.Begin(RecordType.MeshLod))
+                {
+                    w.Str(site);
+                    w.Str(bone);
+                    w.V3s(geometry.Vertices);
+                    w.Ints(geometry.Indices);
+                    w.Ints(default);
+                    w.I32(geometry.Indices.Length / 3);
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        internal void Triangles(string use, List<Triangle> triangles, Vector3 scale)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                using (w.Begin(RecordType.Triangles))
+                {
+                    w.Str(use);
+                    w.V3(scale);
+                    w.V3s(MemoryMarshal.Cast<Triangle, Vector3>(CollectionsMarshal.AsSpan(triangles)));
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        /// <param name="animatedHair">Whether the hair rig runs the live (animated) hair, as the hair rig holds it.</param>
+        internal void HairMesh(HairMeshBinding? binding, bool animatedHair)
+        {
+            var w = Writer;
+            if (w == null) return;
+            try
+            {
+                using (w.Begin(RecordType.HairMesh))
+                {
+                    w.Bool(binding != null);
+                    w.Bool(animatedHair);
+                    w.I32(binding?.VisibleVertices ?? 0);
+                    w.I32(binding?.Samples.Count ?? 0);
+                    if (binding == null) return;
+                    foreach (var region in binding.Samples)
+                    {
+                        var samples = region.Value;
+                        var positions = new Vector3[samples.Length];
+                        var counts = new int[samples.Length];
+                        var total = 0;
+                        for (var i = 0; i < samples.Length; i++)
+                        {
+                            positions[i] = samples[i].Position;
+                            counts[i] = samples[i].Influences.Length;
+                            total += counts[i];
+                        }
+                        var weights = new float[total];
+                        w.Str(region.Key);
+                        w.V3s(positions);
+                        w.Ints(counts);
+                        w.List(total);
+                        var at = 0;
+                        foreach (var sample in samples)
+                            foreach (var influence in sample.Influences)
+                            {
+                                w.Str(influence.Bone);
+                                weights[at++] = influence.Weight;
+                            }
+                        w.Floats(weights);
+                    }
+                }
+            }
+            catch (Exception ex) when (AbortPartial())
+            {
+                Fault(ex);
+            }
+        }
+
+        // ------------------------------------------------------------------ calls from the rest of the plugin
+
+        internal RagdollRecordingWriter.Scope Call(RagdollRecordingWriter w, string method)
+        {
+            var scope = w.Begin(RecordType.ApiCall);
+            try
+            {
+                w.I32(Depth);
+                w.Str(method);
+                return scope;
+            }
+            catch
+            {
+                // The caller never receives the scope, so it could not finish it: do that here (as a
+                // discarded record), or the writer's lock would stay held.
+                w.AbortRecord();
+                scope.Dispose();
+                throw;
+            }
+        }
+
+        internal static bool Return(RagdollRecordingWriter w, string method, bool value)
+        {
+            using (w.Begin(RecordType.ApiReturn))
+            {
+                w.Str(method);
+                w.Bool(value);
+            }
+            return value;
+        }
+
+        // The three helpers below write an argument inside a call record. They read objects handed in by
+        // the caller, so they are the only part of such a record that can throw; when one does, the record
+        // is marked incomplete (the writer puts a note in its place) and the call itself goes ahead.
+
+        internal static void Body(RagdollRecordingWriter w, ExternalBodyHandle? handle)
+        {
+            if (handle == null) { w.Null(); return; }
+            try
+            {
+                w.List(3);
+                w.I32(handle.Body.Value);
+                w.I32(handle.Generation);
+                w.Bool(handle.Removed);
+            }
+            catch { w.AbortRecord(); }
+        }
+
+        internal static void Rig(RagdollRecordingWriter w, ExternalRigHandle? handle)
+        {
+            if (handle == null) { w.Null(); return; }
+            try
+            {
+                var bodies = new int[handle.Bodies.Count];
+                for (var i = 0; i < bodies.Length; i++) bodies[i] = handle.Bodies[i].Body.Value;
+                w.List(3);
+                w.I32(handle.Generation);
+                w.Bool(handle.Removed);
+                w.Ints(bodies);
+            }
+            catch { w.AbortRecord(); }
+        }
+
+        internal static void Parts(RagdollRecordingWriter w, IReadOnlyList<ExternalShapePart>? parts)
+        {
+            if (parts == null) { w.Null(); return; }
+            try
+            {
+                w.List(parts.Count * 3);
+                for (var i = 0; i < parts.Count; i++)
+                {
+                    w.V3(parts[i].HalfExtents);
+                    w.V3(parts[i].LocalPosition);
+                    w.Quat(parts[i].LocalOrientation);
+                }
+            }
+            catch { w.AbortRecord(); }
+        }
+
+        /// <summary>Hands a sequence on unchanged and notes each item as the consumer takes it.</summary>
+        internal static IEnumerable<string> Tee(IEnumerable<string> source, List<string?> seen)
+        {
+            foreach (var item in source)
+            {
+                seen.Add(item);
+                yield return item;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ the ragdoll's recording calls
+    //
+    // Each Rec* method of the ragdoll either forwards to the recorder or, where the record reads the state of other
+    // subsystems, writes that record itself through the recorder's writer, reading the same values at the same
+    // moments as before.
+
+    /// <summary>Called from Activate once the target is known. Opens this activation's file when a session is on.</summary>
+    private void RecBeginActivation(float delay, RagdollTriggerMode mode, float stagger)
+    {
+        if (!RagdollRecordingSession.Enabled) return;
+        try
+        {
+            var file = RagdollRecordingSession.TryOpen(targetIsLocalPlayer, targetEntityId);
+            if (file == null) return;
+
+            // From here on the file is this controller's: a failure below still closes it at deactivation.
+            var w = recorder.Open(file);
+            recorder.WriteHeader(w, file, host.Build, targetIsLocalPlayer);
+
+            recorder.ConfigSnapshot(w);
             using (w.Begin(RecordType.Activate))
             {
                 w.U64((ulong)targetCharacterAddress);
@@ -225,7 +1048,7 @@ public unsafe partial class Ragdoll
                 w.Bool(cachedMeshLodEnabled);
                 w.F32(cachedMeshLodTolerance);
                 w.I64(nextMeshCacheAttempt);
-                RecordingMeshSource.WriteCache(w, frozenMeshCache, recMeshCaches, false);
+                RecordingMeshSource.WriteCache(w, frozenMeshCache, recorder.MeshCaches, false);
                 w.I32(weaponContactMeshOrder.Count);
                 foreach (var address in weaponContactMeshOrder)
                 {
@@ -233,10 +1056,10 @@ public unsafe partial class Ragdoll
                     w.U64((ulong)address);
                     w.U32(entry.Entity);
                     w.U64((ulong)entry.Draw);
-                    RecordingMeshSource.WriteCache(w, entry.Cache, recMeshCaches, false);
+                    RecordingMeshSource.WriteCache(w, entry.Cache, recorder.MeshCaches, false);
                 }
             }
-            RecIdentity(skeletons.TryGetSkeleton(targetCharacterAddress));
+            recorder.Identity(skeletons.TryGetSkeleton(targetCharacterAddress));
         }
         catch (Exception ex) when (RecAbortPartial())
         {
@@ -245,59 +1068,10 @@ public unsafe partial class Ragdoll
     }
 
     /// <summary>Closes this activation's file, if any.</summary>
-    private void RecEndActivation(string reason)
-    {
-        var file = recFile;
-        rec = null;
-        recFile = null;
-        if (file == null) return;
-        try
-        {
-            RagdollRecordingSession.Close(file, reason);
-        }
-        catch (Exception ex)
-        {
-            log.Warning(ex, "RagdollRec: closing the recording failed.");
-        }
-    }
-
-    private void RecFault(Exception ex)
-    {
-        if (!recFaultLogged)
-        {
-            recFaultLogged = true;
-            log.Warning(ex, "RagdollRec: a recorder helper failed; the recording continues without that record.");
-        }
-        try
-        {
-            var w = rec;
-            if (w == null) return;
-            using (w.Begin(RecordType.Note))
-                w.Str("recorder fault: " + ex.GetType().Name + ": " + ex.Message);
-        }
-        catch
-        {
-            // Nothing more to do; never let the recorder disturb the frame.
-        }
-    }
-
-    /// <summary>
-    /// Exception filter of the recorder's own catch blocks. A filter runs before the using-scopes
-    /// between the throw and the catch are disposed, so the record that was being built at that moment
-    /// (if any) can still be marked: its scope then writes a note in its place instead of a record
-    /// that stops half-way. Always lets the catch block run.
-    /// </summary>
-    private bool RecAbortPartial()
-    {
-        try { rec?.AbortRecord(); }
-        catch { /* never let the recorder disturb the frame */ }
-        return true;
-    }
-
-    private void RecLeave()
-    {
-        if (recDepth > 0) recDepth--;
-    }
+    private void RecEndActivation(string reason) => recorder.EndActivation(reason);
+    private void RecFault(Exception ex) => recorder.Fault(ex);
+    private bool RecAbortPartial() => recorder.AbortPartial();
+    private void RecLeave() => recorder.Leave();
 
     /// <summary>Once per rendered frame (the plugin subscribes it to the render hook): steps the ragdoll and writes the pose.</summary>
     internal void OnRenderFrame()
@@ -312,309 +1086,12 @@ public unsafe partial class Ragdoll
         finally { RecLeave(); }
     }
 
-    // ------------------------------------------------------------------ configuration
-
-    private object? RecConfigValue(int index)
-    {
-        var property = RecConfigProperties[index];
-        if (property == null) return "<missing property>";
-        try
-        {
-            var value = property.GetValue(settings);
-            return value switch
-            {
-                null => null,
-                bool or int or uint or long or float or double or string => value,
-                Enum e => Convert.ToInt32(e),
-                System.Collections.IEnumerable list when value is not string => RecJoin(list),
-                _ => System.Text.Json.JsonSerializer.Serialize(value, value.GetType()),
-            };
-        }
-        catch (Exception ex)
-        {
-            return "<unreadable: " + ex.GetType().Name + ">";
-        }
-    }
-
-    private static string RecJoin(System.Collections.IEnumerable list)
-    {
-        var text = new System.Text.StringBuilder("[");
-        var first = true;
-        foreach (var item in list)
-        {
-            if (!first) text.Append(',');
-            first = false;
-            text.Append(System.Text.Json.JsonSerializer.Serialize(item?.ToString()));
-        }
-        return text.Append(']').ToString();
-    }
-
-    private void RecConfigSnapshot(RagdollRecordingWriter w)
-    {
-        var prototypes = recConfigWatchPrototypes ??= Array.ConvertAll(RecConfigProperties,
-            property => property == null ? null : RagdollRecordingWatch.For(property));
-        var values = new object?[RecConfigNames.Length];
-        recConfigWatches = new RagdollRecordingWatch?[RecConfigNames.Length];
-        for (var i = 0; i < RecConfigNames.Length; i++)
-        {
-            values[i] = RecConfigValue(i);
-            // The first look only remembers the value the snapshot holds.
-            var watch = recConfigWatches[i] = prototypes[i]?.Clone();
-            try { watch?.Changed(settings); }
-            catch { recConfigWatches[i] = null; /* unreadable: the snapshot says so; nothing to watch */ }
-        }
-        using (w.Begin(RecordType.ConfigSnapshot))
-        {
-            w.List(RecConfigNames.Length * 2);
-            for (var i = 0; i < RecConfigNames.Length; i++)
-            {
-                w.Str(RecConfigNames[i]);
-                RecAny(w, values[i]);
-            }
-        }
-    }
-
-    /// <summary>
-    /// Once per render frame. While nothing changed this allocates nothing: each watch reads its
-    /// property through a bound getter and compares it in its own type (see RagdollRecordingWatch).
-    /// The value is read the slow way, and written, only for a property that did change.
-    /// </summary>
-    private void RecConfigChanges(RagdollRecordingWriter w)
-    {
-        var watches = recConfigWatches;
-        for (var i = 0; i < watches.Length; i++)
-        {
-            var watch = watches[i];
-            if (watch == null) continue;
-            bool changed;
-            try { changed = watch.Changed(settings); }
-            catch { changed = false; }
-            if (!changed) continue;
-            var now = RecConfigValue(i);
-            using (w.Begin(RecordType.ConfigChange))
-            {
-                w.Str(RecConfigNames[i]);
-                RecAny(w, now);
-            }
-        }
-    }
-
-    // ------------------------------------------------------------------ generic values
-
-    private static void RecAny(RagdollRecordingWriter w, object? value)
-    {
-        switch (value)
-        {
-            case null: w.Null(); break;
-            case bool v: w.Bool(v); break;
-            case int v: w.I32(v); break;
-            case uint v: w.U32(v); break;
-            case short v: w.I32(v); break;
-            case byte v: w.I32(v); break;
-            case long v: w.I64(v); break;
-            case ulong v: w.U64(v); break;
-            case nint v: w.U64((ulong)v); break;
-            case float v: w.F32(v); break;
-            case double v: w.F64(v); break;
-            case string v: w.Str(v); break;
-            case Vector2 v: w.V2(v); break;
-            case Vector3 v: w.V3(v); break;
-            case Quaternion v: w.Quat(v); break;
-            case Enum v: w.I32(Convert.ToInt32(v)); break;
-            case float[] v: w.Floats(v); break;
-            case int[] v: w.Ints(v); break;
-            case Vector3[] v: w.V3s(v); break;
-            case Quaternion[] v: w.Quats(v); break;
-            case BodyHandle v: w.I32(v.Value); break;
-            case TypedIndex v: w.U32(v.Packed); break;
-            // A reference to something recorded elsewhere (a mesh, a LOD): only its presence.
-            default: w.Str("<" + value.GetType().Name + ">"); break;
-        }
-    }
-
-    /// <summary>Writes every public field of a struct or class as one list of (name, value) pairs.</summary>
-    private static void RecFields(RagdollRecordingWriter w, object boxed)
-    {
-        var fields = RecFieldCache.GetOrAdd(boxed.GetType(),
-            static type => type.GetFields(BindingFlags.Public | BindingFlags.Instance));
-        w.List(fields.Length * 2);
-        foreach (var field in fields)
-        {
-            w.Str(field.Name);
-            RecAny(w, field.GetValue(boxed));
-        }
-    }
-
-    // ------------------------------------------------------------------ skeletons and actors
-
-    /// <param name="skeleton">The target's skeleton as the surrounding code obtained it, or null. The model
-    /// type is asked of the draw object only when the ragdoll code itself would ask at this point: once a
-    /// skeleton with models and a Havok skeleton was obtained (the condition in StructuralFit.Start).
-    /// Otherwise the record says -1.</param>
-    private void RecIdentity(IHostSkeleton? skeleton)
-    {
-        var w = rec;
-        if (w == null || targetCharacterAddress == nint.Zero) return;
-        try
-        {
-            Span<byte> customize = stackalloc byte[0x1A];
-            actors.ReadAppearance(targetCharacterAddress, customize, out var modelCharaId);
-            actors.ReadModelType(targetCharacterAddress, skeleton, out var modelType, out var raceSex);
-            using (w.Begin(RecordType.Identity))
-            {
-                w.U64((ulong)targetCharacterAddress);
-                w.Bytes(customize);
-                w.I32(modelCharaId);
-                w.I32(modelType);
-                w.I32(raceSex);
-                w.F32(actors.GetFacing(targetCharacterAddress, ActorSite.Facing));
-                w.V3(actors.GetPosition(targetCharacterAddress, ActorSite.Identity));
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
-    private void RecTopology(RagdollRecordingWriter w, ulong actor, IHostSkeleton skeleton, int partial)
-    {
-        if (!skeleton.PartAvailable(partial)) return;
-        var havok = skeleton.PartIdentity(partial);
-        var bones = skeleton.PartModelPoseLength(partial);
-        if (recTopologies.TryGetValue((actor, partial), out var seen) && seen == (havok, bones)) return;
-        recTopologies[(actor, partial)] = (havok, bones);
-
-        var nameCount = skeleton.PartBoneNameCount(partial);
-        var parentCount = skeleton.PartParentCount(partial);
-        var parents = new int[parentCount];
-        for (var i = 0; i < parentCount; i++) parents[i] = skeleton.PartParent(partial, i);
-        using (w.Begin(RecordType.SkeletonTopology))
-        {
-            w.U64(actor);
-            w.I32(partial);
-            w.I32(bones);
-            w.I32(parentCount);
-            w.I32(skeleton.PartConnectedBone(partial));
-            w.I32(skeleton.PartConnectedParentBone(partial));
-            w.List(nameCount);
-            for (var i = 0; i < nameCount; i++) w.Str(skeleton.PartBoneName(partial, i));
-            w.Ints(parents);
-            w.Bytes(MemoryMarshal.AsBytes(skeleton.PartReferencePose(partial)));
-        }
-    }
-
-    /// <summary>
-    /// Captures a skeleton as the surrounding code is about to read it (or, for PoseOut, has just
-    /// written it): the root transform, the scale sources and the model pose of the body skeleton
-    /// (and of every attached partial skeleton when asked).
-    /// </summary>
     private void RecSkeleton(RecordType type, PosePurpose purpose, nint address, IHostSkeleton? access, bool allPartials)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            var actor = (ulong)address;
-            if (access == null || !access.HasRoot)
-            {
-                using (w.Begin(type))
-                {
-                    w.U64(actor);
-                    w.I32((int)purpose);
-                    w.Bool(false);
-                }
-                return;
-            }
-
-            var skel = access;
-            var partials = allPartials
-                ? Math.Clamp(skel.PartCount, 1, 64)
-                : 1;
-            for (var p = 0; p < partials; p++)
-                RecTopology(w, actor, skel, p);
-
-            var drawScaleValid = TryGetVisualScale(address, out var drawScale);
-            var root = skel.Root;
-            using (w.Begin(type))
-            {
-                w.U64(actor);
-                w.I32((int)purpose);
-                w.Bool(true);
-                w.V3(root.Position);
-                w.Quat(root.Rotation);
-                w.V3(root.Scale);
-                w.Bool(drawScaleValid);
-                w.V3(drawScale);
-                w.I32(partials);
-                for (var p = 0; p < partials; p++)
-                {
-                    w.I32(p);
-                    if (!skel.PartHasPose(p))
-                    {
-                        w.I32(2);
-                        continue;
-                    }
-                    var notInSync = skel.PartInSync(p) ? 0 : 4;
-                    var bytes = MemoryMarshal.AsBytes((ReadOnlySpan<BoneQs>)skel.PartModelPose(p));
-                    var key = (actor, (int)purpose, p);
-                    if (recLastPose.TryGetValue(key, out var last) && bytes.SequenceEqual(last))
-                    {
-                        w.I32(1 | notInSync);
-                        continue;
-                    }
-                    if (last == null || last.Length != bytes.Length)
-                        recLastPose[key] = last = new byte[bytes.Length];
-                    bytes.CopyTo(last);
-                    w.I32(notInSync);
-                    w.Bytes(bytes);
-                }
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
-    private void RecActorPosition(ActorSite site, nint address, Vector3 position)
-    {
-        var w = rec;
-        if (w == null) return;
-        using (w.Begin(RecordType.ActorPosition))
-        {
-            w.I32((int)site);
-            w.U64((ulong)address);
-            w.V3(position);
-        }
-    }
-
+        => recorder.Skeleton(type, purpose, address, access, allPartials);
+    private void RecActorPosition(ActorSite site, nint address, Vector3 position) => recorder.ActorPosition(site, address, position);
     private void RecActorTransform(ActorSite site, nint address, Vector3 position, Quaternion rotation, bool scaleValid, Vector3 scale)
-    {
-        var w = rec;
-        if (w == null) return;
-        using (w.Begin(RecordType.ActorTransform))
-        {
-            w.I32((int)site);
-            w.U64((ulong)address);
-            w.V3(position);
-            w.Quat(rotation);
-            w.Bool(scaleValid);
-            w.V3(scale);
-        }
-    }
-
-    private void RecActorList(string site, IReadOnlyList<nint> actors)
-    {
-        var w = rec;
-        if (w == null) return;
-        using (w.Begin(RecordType.ActorList))
-        {
-            w.Str(site);
-            w.List(actors.Count);
-            for (var i = 0; i < actors.Count; i++) w.U64((ulong)actors[i]);
-        }
-    }
+        => recorder.ActorTransform(site, address, position, rotation, scaleValid, scale);
+    private void RecActorList(string site, IReadOnlyList<nint> actors) => recorder.ActorList(site, actors);
 
     /// <summary>The selected NPCs in the order the collision build walks them (those without a character last, flagged).</summary>
     private void RecSelectedNpcs(string site, List<ColliderCandidate> selected)
@@ -626,8 +1103,8 @@ public unsafe partial class Ragdoll
             var missing = new List<nint>();
             foreach (var npc in selected)
                 (!npc.HasCharacter ? missing : present).Add(npc.Address);
-            RecActorList(site, present);
-            if (missing.Count > 0) RecActorList(site + ".withoutCharacter", missing);
+            recorder.ActorList(site, present);
+            if (missing.Count > 0) recorder.ActorList(site + ".withoutCharacter", missing);
         }
         catch (Exception ex) when (RecAbortPartial())
         {
@@ -635,97 +1112,24 @@ public unsafe partial class Ragdoll
         }
     }
 
-    private void RecWeaponSample(Vector3 position, Quaternion rotation)
-    {
-        var w = rec;
-        if (w == null) return;
-        using (w.Begin(RecordType.WeaponSample))
-        {
-            w.Bool(true);
-            w.V3(position);
-            w.Quat(rotation);
-        }
-    }
-
+    private void RecWeaponSample(Vector3 position, Quaternion rotation) => recorder.WeaponSample(position, rotation);
     private void RecBoneWorldPosition(string site, nint address, string bone, Vector3? position)
-    {
-        var w = rec;
-        if (w == null) return;
-        using (w.Begin(RecordType.BoneWorldPosition))
-        {
-            w.Str(site);
-            w.U64((ulong)address);
-            w.Str(bone);
-            w.Bool(position.HasValue);
-            w.V3(position ?? Vector3.Zero);
-        }
-    }
-
-    // World queries, random draws and clock stamps are recorded by the decorators in
-    // Hosting/RecordingDecorators.cs.
-
-    // ------------------------------------------------------------------ decisions
-
-    private bool RecDecision(string site, bool value)
-    {
-        var w = rec;
-        if (w == null) return value;
-        using (w.Begin(RecordType.Decision))
-        {
-            w.Str(site);
-            w.Bool(value);
-        }
-        return value;
-    }
-
-
-    private void RecEvent(string name, float value)
-    {
-        var w = rec;
-        if (w == null) return;
-        using (w.Begin(RecordType.Event))
-        {
-            w.Str(name);
-            w.F32(value);
-        }
-    }
-
-    // ------------------------------------------------------------------ frames
+        => recorder.BoneWorldPosition(site, address, bone, position);
+    private bool RecDecision(string site, bool value) => recorder.Decision(site, value);
+    private void RecEvent(string name, float value) => recorder.Event(name, value);
 
     /// <summary>Once per render frame while the ragdoll is active, right after the frame's dt is known.</summary>
     private void RecRenderFrame(float dt)
     {
-        var w = rec;
-        var file = recFile;
-        if (w == null || file == null) return;
-        if (!w.IsOpen)
-        {
-            // The session was stopped (or the disk failed): drop the reference so the call sites go quiet.
-            RecEndActivation(w.Failed ? "write failed" : "session stopped");
-            return;
-        }
-        // The byte limits are enforced by the writer for every record (it refuses the record that would
-        // cross one, and everything after it). Here the refusal is noticed and the file is closed.
-        if (RagdollRecordingSession.SessionBytesExhausted)
-        {
-            RagdollRecordingSession.CloseAllAtSessionLimit();
-            RecEndActivation(RagdollRecordingSession.SessionBytesReason);
-            return;
-        }
-        if (file.Seconds > RagdollRecordingSession.SecondsLimit || w.FileLimitReached)
-        {
-            RecEndActivation(w.FileLimitReached
-                ? $"size limit of {RagdollRecordingSession.MaxBytesPerFile / (1024 * 1024)} MiB reached"
-                : $"time limit of {RagdollRecordingSession.MaxSecondsPerFile:F0} s reached");
-            return;
-        }
+        var w = recorder.BeginRenderFrame();
+        if (w == null) return;
         try
         {
-            RecConfigChanges(w);
-            file.RenderFrames = ++recRenderFrame;
+            recorder.ConfigChanges(w);
+            var frame = recorder.NextRenderFrame(recorder.File!);
             using (w.Begin(RecordType.RenderFrame))
             {
-                w.I32(recRenderFrame);
+                w.I32(frame);
                 w.F32(dt);
                 w.F32(elapsed);
                 w.Bool(physicsStarted);
@@ -740,48 +1144,21 @@ public unsafe partial class Ragdoll
         }
     }
 
-    private void RecPreFrame()
-    {
-        if (rec == null) return;
-        try
-        {
-            RecSkeleton(RecordType.SkeletonPose, PosePurpose.PreFrame, targetCharacterAddress,
-                skeletons.TryGetSkeleton(targetCharacterAddress, PosePurpose.PreFrame), false);
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
+    private void RecPreFrame() => recorder.PreFrame();
     private void RecTriggerInputs(RagdollAnimationSample? animation, float? middleHeight, float? motion)
-    {
-        var w = rec;
-        if (w == null) return;
-        using (w.Begin(RecordType.TriggerInputs))
-        {
-            w.Bool(animation.HasValue);
-            w.U64((ulong)(animation?.Id ?? 0));
-            w.F32(animation?.Time ?? 0f);
-            w.F32(animation?.Duration ?? 0f);
-            w.Bool(middleHeight.HasValue);
-            w.F32(middleHeight ?? 0f);
-            w.Bool(motion.HasValue);
-            w.F32(motion ?? 0f);
-        }
-    }
+        => recorder.TriggerInputs(animation, middleHeight, motion);
 
     private void RecFrameBegin(float dt, IHostSkeleton skel)
     {
         var w = rec;
-        var file = recFile;
+        var file = recorder.File;
         if (w == null || file == null) return;
         try
         {
-            file.PhysicsFrames = ++recPhysicsFrame;
+            file.PhysicsFrames = ++recorder.PhysicsFrame;
             using (w.Begin(RecordType.FrameBegin))
             {
-                w.I32(recPhysicsFrame);
+                w.I32(recorder.PhysicsFrame);
                 w.F32(dt);
                 w.F32(physicsAccumulator);
                 w.Bool(prevAllAsleep);
@@ -794,7 +1171,7 @@ public unsafe partial class Ragdoll
                 w.I32(externalBodies.Count);
                 w.I32(externalRigs.Count);
             }
-            RecSkeleton(RecordType.SkeletonPose, PosePurpose.FrameIn, targetCharacterAddress, skel, true);
+            recorder.Skeleton(RecordType.SkeletonPose, PosePurpose.FrameIn, targetCharacterAddress, skel, true);
         }
         catch (Exception ex) when (RecAbortPartial())
         {
@@ -803,22 +1180,7 @@ public unsafe partial class Ragdoll
     }
 
     /// <summary>After each fixed step (and everything the controller does around it): every body's state.</summary>
-    private void RecStep(int substep, bool steppedExternally)
-    {
-        var w = rec;
-        var file = recFile;
-        if (w == null || file == null || simulation == null) return;
-        try
-        {
-            file.FixedSteps = ++recTick;
-            RagdollRecordingBepu.WriteBodyStates(w, simulation, recTick, recPhysicsFrame, substep, steppedExternally,
-                ref recHandles, ref recFlags, ref recStates);
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
+    private void RecStep(int substep, bool steppedExternally) => recorder.Step(substep, steppedExternally);
 
     private void RecFrameEnd(int substeps, bool resting, float renderAlpha)
     {
@@ -826,16 +1188,14 @@ public unsafe partial class Ragdoll
         if (w == null) return;
         using (w.Begin(RecordType.FrameEnd))
         {
-            w.I32(recPhysicsFrame);
+            w.I32(recorder.PhysicsFrame);
             w.I32(substeps);
             w.Bool(resting);
             w.F32(physicsAccumulator);
             w.F32(renderAlpha);
-            w.I32(recTick);
+            w.I32(recorder.Tick);
         }
     }
-
-    // ------------------------------------------------------------------ InitializePhysics
 
     private void RecInitBegin(IHostSkeleton skel)
     {
@@ -843,7 +1203,7 @@ public unsafe partial class Ragdoll
         if (w == null) return;
         try
         {
-            recFitOutcome = 0;
+            recorder.FitOutcome = 0;
             var count = handoffSampleValid && handoffPrevPos != null && handoffPrevRot != null
                 ? Math.Min(handoffPrevCount, Math.Min(handoffPrevPos.Length, handoffPrevRot.Length))
                 : 0;
@@ -858,8 +1218,8 @@ public unsafe partial class Ragdoll
                 w.V3s(count > 0 ? handoffPrevPos.AsSpan(0, count) : default);
                 w.Quats(count > 0 ? handoffPrevRot.AsSpan(0, count) : default);
             }
-            RecIdentity(skel);
-            RecSkeleton(RecordType.SkeletonPose, PosePurpose.Init, targetCharacterAddress, skel, true);
+            recorder.Identity(skel);
+            recorder.Skeleton(RecordType.SkeletonPose, PosePurpose.Init, targetCharacterAddress, skel, true);
         }
         catch (Exception ex) when (RecAbortPartial())
         {
@@ -868,179 +1228,11 @@ public unsafe partial class Ragdoll
     }
 
     private void RecBoneDefs(RagdollBoneDef[] defs, Dictionary<string, int> nameToIndex, bool generic)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            using (w.Begin(RecordType.BoneDefs))
-            {
-                w.Bool(generic);
-                w.I32(defs.Length);
-                foreach (var def in defs)
-                {
-                    RecFields(w, def);
-                    w.I32(nameToIndex.TryGetValue(def.Name, out var index) ? index : -1);
-                }
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
-    private void RecStructuralFits(Dictionary<string, StructuralMeshFitter.Fit> fits)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            using (w.Begin(RecordType.StructuralFits))
-            {
-                w.I32(recFitOutcome);
-                w.I32(fits.Count);
-                foreach (var entry in fits)
-                {
-                    w.Str(entry.Key);
-                    RecFields(w, entry.Value);
-                }
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
+        => recorder.BoneDefs(defs, nameToIndex, generic);
+    private void RecStructuralFits(Dictionary<string, StructuralMeshFitter.Fit> fits) => recorder.StructuralFits(fits);
     /// <summary>The cached bone-local surface of a character, the first time this recording sees that cache.</summary>
-    private void RecMeshCache(FrozenMeshGeometryCache? cache, string use)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            using (w.Begin(RecordType.MeshCache))
-            {
-                w.Str(use);
-                RecordingMeshSource.WriteCache(w, cache, recMeshCaches, true);
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
-    private void RecMeshLod(string site, string bone, MeshCollisionLodResult lod)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            using (w.Begin(RecordType.MeshLod))
-            {
-                w.Str(site);
-                w.Str(bone);
-                w.V3s(lod.Geometry.Vertices);
-                w.Ints(lod.Geometry.Indices);
-                w.Ints(lod.SourceVertexIndices);
-                w.I32(lod.SourceFaceCount);
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
-    private void RecMeshUse(string site, string bone, BodyMeshGeometry geometry)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            using (w.Begin(RecordType.MeshLod))
-            {
-                w.Str(site);
-                w.Str(bone);
-                w.V3s(geometry.Vertices);
-                w.Ints(geometry.Indices);
-                w.Ints(default);
-                w.I32(geometry.Indices.Length / 3);
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
-    private void RecTriangles(string use, List<Triangle> triangles, Vector3 scale)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            using (w.Begin(RecordType.Triangles))
-            {
-                w.Str(use);
-                w.V3(scale);
-                w.V3s(MemoryMarshal.Cast<Triangle, Vector3>(CollectionsMarshal.AsSpan(triangles)));
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
-
-    private void RecHairMesh(HairMeshBinding? binding)
-    {
-        var w = rec;
-        if (w == null) return;
-        try
-        {
-            using (w.Begin(RecordType.HairMesh))
-            {
-                w.Bool(binding != null);
-                w.Bool(hairRig.AnimatedHair);
-                w.I32(binding?.VisibleVertices ?? 0);
-                w.I32(binding?.Samples.Count ?? 0);
-                if (binding == null) return;
-                foreach (var region in binding.Samples)
-                {
-                    var samples = region.Value;
-                    var positions = new Vector3[samples.Length];
-                    var counts = new int[samples.Length];
-                    var total = 0;
-                    for (var i = 0; i < samples.Length; i++)
-                    {
-                        positions[i] = samples[i].Position;
-                        counts[i] = samples[i].Influences.Length;
-                        total += counts[i];
-                    }
-                    var weights = new float[total];
-                    w.Str(region.Key);
-                    w.V3s(positions);
-                    w.Ints(counts);
-                    w.List(total);
-                    var at = 0;
-                    foreach (var sample in samples)
-                        foreach (var influence in sample.Influences)
-                        {
-                            w.Str(influence.Bone);
-                            weights[at++] = influence.Weight;
-                        }
-                    w.Floats(weights);
-                }
-            }
-        }
-        catch (Exception ex) when (RecAbortPartial())
-        {
-            RecFault(ex);
-        }
-    }
+    private void RecMeshCache(FrozenMeshGeometryCache? cache, string use) => recorder.MeshCache(cache, use);
+    private void RecTriangles(string use, List<Triangle> triangles, Vector3 scale) => recorder.Triangles(use, triangles, scale);
 
     private void RecInitEnd(bool ok, int solverIterations, int solverSubsteps, bool generic)
     {
@@ -1056,7 +1248,7 @@ public unsafe partial class Ragdoll
                     w.Str(rb.Name);
                     w.I32(rb.BoneIndex);
                     w.I32(rb.BodyHandle.Value);
-                    RecFields(w, rb);
+                    Recorder.Fields(w, rb);
                 }
             }
             using (w.Begin(RecordType.InitEnd))
@@ -1078,8 +1270,7 @@ public unsafe partial class Ragdoll
                 w.I32(hairRig.ChainCount);
             }
             if (simulation != null)
-                RagdollRecordingBepu.WriteBodyStates(w, simulation, 0, recPhysicsFrame, 0, false,
-                    ref recHandles, ref recFlags, ref recStates);
+                recorder.BodyStates(w, simulation, 0, 0, false);
         }
         catch (Exception ex) when (RecAbortPartial())
         {
@@ -1089,82 +1280,13 @@ public unsafe partial class Ragdoll
 
     // ------------------------------------------------------------------ calls from the rest of the plugin
 
-    private RagdollRecordingWriter.Scope RecCall(RagdollRecordingWriter w, string method)
-    {
-        var scope = w.Begin(RecordType.ApiCall);
-        try
-        {
-            w.I32(recDepth);
-            w.Str(method);
-            return scope;
-        }
-        catch
-        {
-            // The caller never receives the scope, so it could not finish it: do that here (as a
-            // discarded record), or the writer's lock would stay held.
-            w.AbortRecord();
-            scope.Dispose();
-            throw;
-        }
-    }
-
-    private static bool RecReturn(RagdollRecordingWriter w, string method, bool value)
-    {
-        using (w.Begin(RecordType.ApiReturn))
-        {
-            w.Str(method);
-            w.Bool(value);
-        }
-        return value;
-    }
-
-    // The three helpers below write an argument inside a call record. They read objects handed in by
-    // the caller, so they are the only part of such a record that can throw; when one does, the record
-    // is marked incomplete (the writer puts a note in its place) and the call itself goes ahead.
-
-    private static void RecBody(RagdollRecordingWriter w, ExternalBodyHandle? handle)
-    {
-        if (handle == null) { w.Null(); return; }
-        try
-        {
-            w.List(3);
-            w.I32(handle.Body.Value);
-            w.I32(handle.Generation);
-            w.Bool(handle.Removed);
-        }
-        catch { w.AbortRecord(); }
-    }
-
-    private static void RecRig(RagdollRecordingWriter w, ExternalRigHandle? handle)
-    {
-        if (handle == null) { w.Null(); return; }
-        try
-        {
-            var bodies = new int[handle.Bodies.Count];
-            for (var i = 0; i < bodies.Length; i++) bodies[i] = handle.Bodies[i].Body.Value;
-            w.List(3);
-            w.I32(handle.Generation);
-            w.Bool(handle.Removed);
-            w.Ints(bodies);
-        }
-        catch { w.AbortRecord(); }
-    }
-
-    private static void RecParts(RagdollRecordingWriter w, IReadOnlyList<ExternalShapePart>? parts)
-    {
-        if (parts == null) { w.Null(); return; }
-        try
-        {
-            w.List(parts.Count * 3);
-            for (var i = 0; i < parts.Count; i++)
-            {
-                w.V3(parts[i].HalfExtents);
-                w.V3(parts[i].LocalPosition);
-                w.Quat(parts[i].LocalOrientation);
-            }
-        }
-        catch { w.AbortRecord(); }
-    }
+    private RagdollRecordingWriter.Scope RecCall(RagdollRecordingWriter w, string method) => recorder.Call(w, method);
+    private static bool RecReturn(RagdollRecordingWriter w, string method, bool value) => Recorder.Return(w, method, value);
+    private static void RecBody(RagdollRecordingWriter w, ExternalBodyHandle? handle) => Recorder.Body(w, handle);
+    private static void RecRig(RagdollRecordingWriter w, ExternalRigHandle? handle) => Recorder.Rig(w, handle);
+    private static void RecParts(RagdollRecordingWriter w, IReadOnlyList<ExternalShapePart>? parts) => Recorder.Parts(w, parts);
+    /// <summary>Hands a sequence on unchanged and notes each item as the consumer takes it.</summary>
+    private static IEnumerable<string> RecTee(IEnumerable<string> source, List<string?> seen) => Recorder.Tee(source, seen);
 
     internal bool TryCreateExternalDynamicBody(IReadOnlyList<ExternalShapePart> parts, float mass,
         Vector3 position, Quaternion orientation, Vector3 linearVelocity, Vector3 angularVelocity,
@@ -1402,16 +1524,6 @@ public unsafe partial class Ragdoll
             {
                 RecFault(ex);
             }
-        }
-    }
-
-    /// <summary>Hands a sequence on unchanged and notes each item as the consumer takes it.</summary>
-    private static IEnumerable<string> RecTee(IEnumerable<string> source, List<string?> seen)
-    {
-        foreach (var item in source)
-        {
-            seen.Add(item);
-            yield return item;
         }
     }
 

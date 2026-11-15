@@ -203,7 +203,7 @@ public unsafe partial class Ragdoll
                 {
                     var reduced = CreateBodyTriangleMesh(cachedLod.Geometry);
                     mesh.Dispose(ctx.BufferPool); mesh = reduced; collisionLod = cachedLod;
-                    if (ctx.Core.Recording) ctx.Core.RecMeshLod("init", boneName, cachedLod);
+                    if (ctx.Recorder.IsRecording) ctx.Recorder.MeshLod("init", boneName, cachedLod);
                 }
                 center = boneOrigin + Vector3.Transform(localCenter, bodyRotation);
                 shapeIndex = ctx.Simulation.Shapes.Add(mesh);
